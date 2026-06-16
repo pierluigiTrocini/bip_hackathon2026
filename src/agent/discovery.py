@@ -505,10 +505,12 @@ class DiscoveryAgent:
                 raw = resp.get("response", "{}")
             return _parse(raw)
 
+        # Discovery prompt is much larger than normal inference — use at least 3× t_behavior or 120s
+        discovery_timeout = max(t_behavior * 3, 120)
         try:
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                 fut = pool.submit(_call)
-                return fut.result(timeout=t_behavior)
+                return fut.result(timeout=discovery_timeout)
         except Exception as exc:
             journal_module.log_error(
                 source="DiscoveryAgent.llm", error=str(exc),
