@@ -1,9 +1,8 @@
 import concurrent.futures
 import json
 
-import ollama
-
 from src.agent import config
+from src.agent import llm_stream
 from src.agent import journal as journal_module
 from src.agent import strategy_library
 
@@ -183,14 +182,13 @@ class Reasoner:
         )
 
         def _call() -> dict:
-            resp = ollama.generate(
+            raw = llm_stream.generate(
                 model=config.OLLAMA_REASONING_MODEL,
                 prompt=user_prompt,
                 format=_DECISION_SCHEMA,
                 options={"temperature": 0.2, "num_predict": 300},
                 keep_alive="30s",
             )
-            raw = resp.response
             # Strip any trailing content after the JSON object
             raw = raw.strip()
             if raw and raw[0] == "{":

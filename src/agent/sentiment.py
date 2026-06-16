@@ -1,9 +1,8 @@
 import concurrent.futures
 import json
 
-import ollama
-
 from src.agent import config
+from src.agent import llm_stream
 from src.agent import news_log
 
 _SCHEMA = {
@@ -77,14 +76,13 @@ def analyse(
         )
 
         def _sentiment_call() -> dict:
-            resp = ollama.generate(
+            raw = llm_stream.generate(
                 model=config.OLLAMA_SENTIMENT_MODEL,
                 prompt=sentiment_prompt,
                 format=_SCHEMA,
                 options={"temperature": 0.0, "num_predict": 200},
                 keep_alive="30s",
             )
-            raw = resp.get("response", "{}") if isinstance(resp, dict) else getattr(resp, "response", "{}")
             parsed = json.loads(raw)
             score = float(parsed.get("score", 0.0))
             score = max(-1.0, min(1.0, score))

@@ -9,9 +9,7 @@ Discovery phase — 5-step pipeline:
 """
 import concurrent.futures
 import json
-import os
 import re
-import sys
 from collections import Counter
 
 import requests
@@ -20,6 +18,7 @@ import ollama
 
 from src.agent import config
 from src.agent import journal as journal_module
+from src.agent import llm_stream
 
 _MAX_CANDIDATES = 5
 _MIN_CANDIDATES = 2
@@ -84,7 +83,7 @@ def _extract_english_search_terms(prompt: str, t_behavior: int) -> list[str]:
     Falls back to raw word extraction on failure.
     """
     try:
-        resp = ollama.generate(
+        raw = llm_stream.generate(
             model=config.OLLAMA_SENTIMENT_MODEL,   # qwen2.5:3b — fast
             prompt=(
                 "Extract 5-8 English search terms (company names, sector names, technologies) "
@@ -97,7 +96,6 @@ def _extract_english_search_terms(prompt: str, t_behavior: int) -> list[str]:
             options={"temperature": 0.1, "num_predict": 150},
             keep_alive="30s",
         )
-        raw = resp.get("response", "{}")
         terms = json.loads(raw).get("search_terms", [])
         terms = [str(t).replace("_", " ").strip() for t in terms if t and len(str(t).strip()) >= 2][:8]
         if terms:
@@ -229,14 +227,13 @@ def _extract_company_names(
         "List 8-15 publicly-traded US companies aligned with this strategy:"
     )
     try:
-        resp = ollama.generate(
+        raw = llm_stream.generate(
             model=config.OLLAMA_SENTIMENT_MODEL,
             prompt=f"{system_msg}\n\n{user_msg}",
             format=_COMPANY_NAMES_SCHEMA,
             options={"temperature": 0.1, "num_predict": 200},
             keep_alive="30s",
         )
-        raw = resp.get("response", "{}")
         names = json.loads(raw).get("companies", [])
         return [str(n).strip() for n in names if n and len(str(n).strip()) >= 2][:15]
     except Exception as exc:
@@ -381,74 +378,6 @@ def _build_llm_prompt(
     )
 
 
-# ── Streaming LLM output (gray, self-erasing) ────────────────────────────────
-
-def _stream_llm_gray(model: str, full_prompt: str, format_schema: dict, options: dict) -> str:
-    """
-    Stream Ollama output token-by-token in dark gray, then erase those lines.
-    Only the streamed block is removed — everything above it stays intact.
-    Returns the full accumulated response string.
-    """
-    try:
-        cols = os.get_terminal_size().columns
-    except OSError:
-        cols = 80
-
-    # Header line (included in the erasable block)
-    header = f"\033[90m  ╭─ {model} {'─' * max(0, cols - len(model) - 6)}\n  │ \033[0m"
-    sys.stdout.write(header)
-    sys.stdout.flush()
-
-    full_text = ""
-    # Track lines to erase: 1 for the header line already printed
-    newline_count = 1
-    # Current column position (starts after "  │ " prefix = 4 chars)
-    current_col = 4
-
-    sys.stdout.write("\033[90m")  # switch to dark gray for token output
-    sys.stdout.flush()
-
-    try:
-        for chunk in ollama.generate(
-            model=model,
-            prompt=full_prompt,
-            format=format_schema,
-            options=options,
-            stream=True,
-            keep_alive="30s",
-        ):
-            token = chunk.get("response", "")
-            if not token:
-                continue
-            full_text += token
-            sys.stdout.write(token)
-            sys.stdout.flush()
-
-            # Track cursor position to count actual terminal lines used
-            for ch in token:
-                if ch == "\n":
-                    newline_count += 1
-                    current_col = 0
-                else:
-                    current_col += 1
-                    if current_col >= cols:
-                        newline_count += 1
-                        current_col = 0
-    finally:
-        sys.stdout.write("\033[0m")  # reset color
-        # Ensure we're on a new line before erasing upward
-        if current_col > 0:
-            sys.stdout.write("\n")
-            newline_count += 1
-        sys.stdout.flush()
-
-    # Move cursor up N lines, then clear from cursor to end of screen
-    sys.stdout.write(f"\033[{newline_count}A\033[J")
-    sys.stdout.flush()
-
-    return full_text
-
-
 # ── Main DiscoveryAgent ───────────────────────────────────────────────────────
 
 class DiscoveryAgent:
@@ -466,7 +395,7 @@ class DiscoveryAgent:
             lines.append(line)
         return lines
 
-    def _call_llm(self, llm_prompt: str, t_behavior: int, stream: bool = False) -> list[dict]:
+    def _call_llm(self, llm_prompt: str, t_behavior: int) -> list[dict]:
         full_prompt = f"{_SYSTEM_PROMPT}\n\n{llm_prompt}"
         options = {"temperature": 0.3, "num_predict": 900}
 
@@ -490,19 +419,13 @@ class DiscoveryAgent:
                 return candidates
 
         def _call():
-            if stream:
-                raw = _stream_llm_gray(
-                    config.OLLAMA_REASONING_MODEL, full_prompt, _DISCOVERY_SCHEMA, options
-                )
-            else:
-                resp = ollama.generate(
-                    model=config.OLLAMA_REASONING_MODEL,
-                    prompt=full_prompt,
-                    format=_DISCOVERY_SCHEMA,
-                    options=options,
-                    keep_alive="30s",
-                )
-                raw = resp.get("response", "{}")
+            raw = llm_stream.generate(
+                model=config.OLLAMA_REASONING_MODEL,
+                prompt=full_prompt,
+                format=_DISCOVERY_SCHEMA,
+                options=options,
+                keep_alive="30s",
+            )
             return _parse(raw)
 
         # Discovery prompt is much larger than normal inference — use at least 3× t_behavior or 120s
@@ -526,7 +449,6 @@ class DiscoveryAgent:
         t_behavior: int,
         dashboard=None,
         max_rounds: int = 3,
-        stream: bool = False,
     ) -> list[dict]:
         """
         Iteratively validate candidates against Alpaca.
@@ -616,7 +538,7 @@ class DiscoveryAgent:
                 f"(round {round_num + 1}, esclusi: {excl_str or 'nessuno'})…",
                 "info",
             )
-            pending = self._call_llm(base_llm_prompt + retry_suffix, t_behavior, stream=stream)
+            pending = self._call_llm(base_llm_prompt + retry_suffix, t_behavior)
             if not pending:
                 _log("  [discovery] LLM non ha proposto ulteriori candidati.", "warn")
                 break
@@ -698,8 +620,7 @@ class DiscoveryAgent:
             "info",
         )
         llm_prompt = _build_llm_prompt(prompt, news_articles, ranked, alpaca_headlines, company_names)
-        interactive = dashboard is not None
-        raw_candidates = self._call_llm(llm_prompt, t_behavior, stream=interactive)
+        raw_candidates = self._call_llm(llm_prompt, t_behavior)
         _log(
             f"  [discovery] LLM ha proposto {len(raw_candidates)} candidati: "
             + ", ".join(c.get("ticker", "?") for c in raw_candidates),
@@ -709,7 +630,7 @@ class DiscoveryAgent:
         # ── Step 4: iterative Alpaca validation (up to 3 rounds) ─────────────
         validated = self._iterative_validate(
             raw_candidates, llm_prompt, tool_executor, t_behavior, dashboard,
-            max_rounds=3, stream=interactive,
+            max_rounds=3,
         )
         _log(
             f"  [discovery] Ticker finali validati ({len(validated)}): "

@@ -8,9 +8,8 @@ import os
 import threading
 from datetime import datetime, timedelta, timezone
 
-import ollama
-
 from src.agent import config
+from src.agent import llm_stream
 
 NEWS_LOG_PATH: str = config.NEWS_LOG_PATH
 
@@ -84,14 +83,13 @@ def extract_keywords_and_relevance(
             f"Articles:\n{numbered_articles_text}"
         )
 
-        resp = ollama.generate(
+        raw = llm_stream.generate(
             model=config.OLLAMA_SENTIMENT_MODEL,
             prompt=prompt,
             format=_KEYWORD_SCHEMA,
             options={"temperature": 0.0, "num_predict": 300},
             keep_alive="30s",
         )
-        raw = resp.get("response", "[]") if isinstance(resp, dict) else getattr(resp, "response", "[]")
         raw = raw.strip()
 
         # Find the JSON array
