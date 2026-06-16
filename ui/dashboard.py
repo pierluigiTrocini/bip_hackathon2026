@@ -1,4 +1,5 @@
 import concurrent.futures
+import re
 import sys
 import threading
 import time
@@ -187,6 +188,146 @@ class Dashboard:
                 return {"source": "behavior_change", "data": {"new_prompt": new_prompt}}
             return {"source": "confirmed", "data": {}}
         return {"source": "confirmed", "data": {}}
+
+    def print_discovery_candidates(self, candidates: list[dict]) -> None:
+        table = Table(
+            show_header=True,
+            header_style="bold magenta",
+            box=None,
+            padding=(0, 2),
+        )
+        table.add_column("#", justify="right", min_width=2, style="dim")
+        table.add_column("Ticker", style="bold", min_width=6)
+        table.add_column("Conf", justify="right", min_width=5)
+        table.add_column("Motivazione", min_width=60, no_wrap=False)
+
+        for i, c in enumerate(candidates, 1):
+            conf = c.get("confidence", 0.0)
+            conf_col = "green" if conf >= 0.7 else "yellow" if conf >= 0.4 else "red"
+            table.add_row(
+                str(i),
+                c["ticker"],
+                f"[{conf_col}]{conf:.2f}[/{conf_col}]",
+                c.get("reason", ""),
+            )
+
+        _console.print(
+            Panel(
+                table,
+                title="[bold magenta]◆ DISCOVERY — Ticker candidati[/bold magenta]",
+                subtitle="[dim]Basato sul tuo prompt e sulle news di mercato[/dim]",
+                border_style="magenta",
+                padding=(1, 2),
+            )
+        )
+
+    def confirm_tickers(self, candidates: list[dict]) -> list[str]:
+        """
+        Ask the user to confirm the proposed ticker list or provide a custom one.
+        Returns the final list of ticker strings.
+        """
+        default = [c["ticker"] for c in candidates]
+        default_str = ", ".join(default)
+        _console.print(
+            f"\n[bold]Ticker selezionati dall'agente:[/bold] [cyan]{default_str}[/cyan]\n"
+            f"  [dim]Premi INVIO per confermare, oppure inserisci una lista personalizzata "
+            f"(es: AAPL MSFT TSLA):[/dim]"
+        )
+        try:
+            raw = input("> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            raw = ""
+
+        if not raw:
+            _console.print(f"[green]✓ Confermati:[/green] {default_str}")
+            return default
+
+        # Parse space- or comma-separated uppercase tickers
+        tokens = re.split(r"[\s,]+", raw.upper())
+        custom = [t for t in tokens if re.fullmatch(r"[A-Z]{1,5}", t)]
+        if not custom:
+            _console.print(f"[yellow]Input non valido — uso la lista proposta: {default_str}[/yellow]")
+            return default
+
+        result_str = ", ".join(custom)
+        _console.print(f"[green]✓ Lista personalizzata:[/green] {result_str}")
+        return custom
+
+    def print_cycle_summary(
+        self,
+        cycle: int,
+        rows: list[dict],
+        pnl_pct: float,
+        portfolio_value: float,
+        cash: float,
+        mode: str,
+        wait_seconds: int,
+        veto: bool,
+    ) -> None:
+        table = Table(
+            show_header=True,
+            header_style="bold cyan",
+            box=None,
+            padding=(0, 2),
+        )
+        table.add_column("Ticker", style="bold", min_width=6)
+        table.add_column("Prezzo", justify="right", min_width=10)
+        table.add_column("Trend", min_width=6)
+        table.add_column("Sentiment", min_width=16)
+        table.add_column("Decisione", min_width=16)
+        table.add_column("Conf", justify="right", min_width=5)
+        table.add_column("Ordine", min_width=8)
+        table.add_column("Ragionamento (sintesi)", min_width=40, no_wrap=True)
+
+        action_color = {"buy": "green", "sell": "red", "hold": "yellow"}
+        trend_symbol = {"up": "↑", "down": "↓", "flat": "→"}
+        sentiment_color = {"positive": "green", "negative": "red", "neutral": "white", "very_negative": "red", "very_positive": "green"}
+
+        for r in rows:
+            act = r["action"]
+            act_col = action_color.get(act, "white")
+            stale_tag = " [STALE]" if r.get("stale") else ""
+            price_str = f"${r['price']:,.2f}{stale_tag}"
+            trend_s = trend_symbol.get(r["trend"], r["trend"])
+            sent_label = r["sentiment_label"]
+            sent_score = r["sentiment_score"]
+            sent_col = sentiment_color.get(sent_label, "white")
+            order_str = "✓ inviato" if r.get("order_id") else "—"
+            reasoning_short = (r["reasoning"] or "")[:55]
+            if len(r["reasoning"] or "") > 55:
+                reasoning_short += "…"
+
+            table.add_row(
+                r["ticker"],
+                price_str,
+                trend_s,
+                f"[{sent_col}]{sent_label} ({sent_score:+.2f})[/{sent_col}]",
+                f"[{act_col}]{act.upper()}[/{act_col}]",
+                f"{r['conf']:.2f}",
+                order_str,
+                reasoning_short,
+            )
+
+        pnl_col = "green" if pnl_pct >= 0 else "red"
+        mode_str = f"[red]CONSERVATIVE[/red]" if mode == "conservative" else "[green]NORMAL[/green]"
+        veto_str = "  [red][NEWS VETO][/red]" if veto else ""
+        footer = (
+            f"Portfolio: [bold]${portfolio_value:,.2f}[/bold]  "
+            f"Cash: ${cash:,.2f}  "
+            f"P&L: [{pnl_col}]{pnl_pct:+.2%}[/{pnl_col}]  "
+            f"Modalità: {mode_str}{veto_str}\n"
+            f"[dim]Prossimo ciclo tra {wait_seconds}s — INVIO conferma · [m] override · [c] cambia comportamento[/dim]"
+        )
+
+        _console.print(
+            Panel(
+                table if rows else Text("Nessun ticker elaborato in questo ciclo.", style="dim"),
+                title=f"[bold blue]◆ CICLO {cycle} — RIEPILOGO[/bold blue]",
+                subtitle=footer,
+                border_style="blue",
+                padding=(1, 2),
+            )
+        )
 
     def print_resoconto(self, summary: dict) -> None:
         table = Table(show_header=False, box=None, padding=(0, 1))

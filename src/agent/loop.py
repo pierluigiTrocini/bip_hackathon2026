@@ -31,6 +31,7 @@ class AgentLoop:
         behavior_manager: BehaviorManager,
         session_manager: SessionManager,
         dashboard,
+        tickers: list[str] | None = None,
     ) -> None:
         self._session = session
         self._at = adaptive_timeout
@@ -44,6 +45,7 @@ class AgentLoop:
         self._dashboard = dashboard
         self._running = False
         self._cycle = session.get("cycle", 0)
+        self._tickers: list[str] = tickers if tickers else config.TICKERS
 
         # propagate session_id to sub-modules
         sid = session.get("session_id", "")
@@ -89,7 +91,7 @@ class AgentLoop:
         t_behavior = self._at.t_behavior()
         market_open = self._te.is_market_open()
 
-        tickers_str = ", ".join(config.TICKERS)
+        tickers_str = ", ".join(self._tickers)
         mkt_str = "APERTO" if market_open else "CHIUSO"
         self._dashboard.log(
             f"── Ciclo {self._cycle} ─────────────────  "
@@ -100,8 +102,9 @@ class AgentLoop:
 
         veto_triggered = False
         last_entry: dict = {}
+        cycle_rows: list[dict] = []  # accumulate per-ticker results for end-of-cycle summary
 
-        for ticker in config.TICKERS:
+        for ticker in self._tickers:
             if ticker in self._te._blacklisted:
                 self._dashboard.log(f"  {ticker} → blacklistato, skip", "warn")
                 continue
@@ -296,6 +299,21 @@ class AgentLoop:
                 self._mm.update(entry)
                 last_entry = entry
 
+                # accumulate row for end-of-cycle summary
+                cycle_rows.append({
+                    "ticker": ticker,
+                    "price": price,
+                    "trend": trend,
+                    "sentiment_label": sentiment_data["label"],
+                    "sentiment_score": sentiment_data["score"],
+                    "action": action,
+                    "conf": decision["confidence"],
+                    "reasoning": decision["reasoning"],
+                    "order_id": order_result.get("order_id"),
+                    "mode": mode,
+                    "stale": stale,
+                })
+
                 # 9. UPDATE DASHBOARD
                 self._dashboard.update(ticker, entry, portfolio_result.data if portfolio_result.ok else {}, t_wait, t_behavior)
 
@@ -329,10 +347,16 @@ class AgentLoop:
         wait_seconds = 2 if veto_triggered else self._at.t_wait()
         if veto_triggered:
             self._dashboard.log("  [NEWS VETO] attesa ridotta a 2s", "err")
-        self._dashboard.log(
-            f"── Ciclo {self._cycle} completato. Attesa {wait_seconds}s "
-            f"(INVIO=conferma, m=override, c=comportamento) ─────",
-            "wait",
+
+        self._dashboard.print_cycle_summary(
+            cycle=self._cycle,
+            rows=cycle_rows,
+            pnl_pct=pnl_pct if cycle_rows else 0.0,
+            portfolio_value=portfolio_value if cycle_rows else 0.0,
+            cash=cash if cycle_rows else 0.0,
+            mode=mode if cycle_rows else "normal",
+            wait_seconds=wait_seconds,
+            veto=veto_triggered,
         )
         result = self._dashboard.wait_for_user_input(wait_seconds)
 

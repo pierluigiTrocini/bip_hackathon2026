@@ -204,6 +204,51 @@ class ToolExecutor:
         except Exception as exc:
             return self._cache_fallback("__portfolio__", "portfolio", str(exc))
 
+    def get_market_news(self, keywords: list[str] | None = None, limit: int = 10) -> ToolResult:
+        """Fetch general market news, optionally filtered by keywords."""
+        try:
+            def fetch():
+                import requests as req_lib
+                headers = {
+                    "APCA-API-KEY-ID": config.ALPACA_API_KEY,
+                    "APCA-API-SECRET-KEY": config.ALPACA_SECRET_KEY,
+                }
+                params: dict = {"limit": limit}
+                resp = req_lib.get(
+                    "https://data.alpaca.markets/v1beta1/news",
+                    headers=headers, params=params, timeout=15,
+                )
+                resp.raise_for_status()
+                raw = resp.json().get("news", [])
+                articles = [
+                    {
+                        "title": a.get("headline", ""),
+                        "summary": a.get("summary", ""),
+                        "symbols": a.get("symbols", []),
+                    }
+                    for a in raw[:limit]
+                ]
+                # keyword filter if provided
+                if keywords:
+                    kw_lower = [k.lower() for k in keywords]
+                    filtered = [
+                        a for a in articles
+                        if any(k in (a["title"] + a["summary"]).lower() for k in kw_lower)
+                    ]
+                    articles = filtered if filtered else articles
+                return ToolResult(ok=True, data={"articles": articles})
+            return self._with_retry(fetch, None)
+        except Exception as exc:
+            return ToolResult(ok=False, data={"articles": []}, error=str(exc))
+
+    def validate_ticker(self, ticker: str) -> bool:
+        """Return True if ticker has a tradeable price on Alpaca."""
+        try:
+            result = self.get_price(ticker)
+            return result.ok and result.data.get("price", 0.0) > 0
+        except Exception:
+            return False
+
     def is_market_open(self) -> bool:
         try:
             client = self._get_trading_client()

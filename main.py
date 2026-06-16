@@ -30,6 +30,7 @@ def main():
     from src.agent.broker import Broker
     from src.agent.session import SessionManager
     from src.agent.behavior import BehaviorManager
+    from src.agent.discovery import DiscoveryAgent
     from src.agent.loop import AgentLoop
     from ui.dashboard import Dashboard
 
@@ -41,6 +42,7 @@ def main():
     dashboard.log("Ricerca sessione precedente…", "info")
     previous = session_mgr.detect_previous_session()
 
+    resuming = False
     if previous:
         dashboard.log(
             f"Sessione trovata: {str(previous.get('session_id','?'))[:8]}… "
@@ -53,6 +55,7 @@ def main():
         if choice == "resume":
             session = session_mgr.resume(previous)
             prompt = session["active_prompt"]
+            resuming = True
             dashboard.log(f"Sessione ripresa. Prompt: {prompt[:60]}", "ok")
         else:
             prompt = input("\nInserisci il comportamento del nuovo agente: ").strip()
@@ -83,11 +86,40 @@ def main():
     reasoner         = Reasoner()
     broker           = Broker()
     behavior_manager = BehaviorManager(session, adaptive_timeout)
+    discovery_agent  = DiscoveryAgent()
+    discovery_agent._session_id = session.get("session_id", "")
     dashboard.log(
-        f"Moduli pronti. Ticker: {', '.join(config.TICKERS)}  "
         f"Modelli: {config.OLLAMA_REASONING_MODEL} + {config.OLLAMA_SENTIMENT_MODEL}",
         "ok",
     )
+
+    # Step 3b: Discovery phase (skip if resuming — use saved tickers)
+    if resuming and session.get("tickers"):
+        confirmed_tickers: list[str] = session["tickers"]
+        dashboard.log(
+            f"Ripresa sessione — ticker dalla sessione precedente: {', '.join(confirmed_tickers)}",
+            "ok",
+        )
+    else:
+        dashboard.log("", "info")
+        dashboard.log("━━━ FASE DI DISCOVERY ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", "info")
+        dashboard.log(f"Prompt ricevuto: \"{prompt[:100]}\"", "info")
+        dashboard.log("Analisi news di mercato e selezione ticker in corso…", "info")
+
+        t_behavior = adaptive_timeout.t_behavior()
+        candidates = discovery_agent.discover(prompt, tool_executor, t_behavior, dashboard)
+
+        dashboard.print_discovery_candidates(candidates)
+        confirmed_tickers = dashboard.confirm_tickers(candidates)
+        session["tickers"] = confirmed_tickers
+        session_mgr.save(session)
+
+        dashboard.log(
+            f"Ticker confermati per questa sessione: {', '.join(confirmed_tickers)}",
+            "ok",
+        )
+        dashboard.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", "info")
+        dashboard.log("", "info")
 
     # Step 4: Start loop
     loop = AgentLoop(
@@ -101,6 +133,7 @@ def main():
         behavior_manager=behavior_manager,
         session_manager=session_mgr,
         dashboard=dashboard,
+        tickers=confirmed_tickers,
     )
 
     dashboard.log("Loop avviato. Ctrl+C per fermare.", "ok")

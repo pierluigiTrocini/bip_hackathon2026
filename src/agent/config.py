@@ -8,6 +8,10 @@ ALPACA_API_KEY: str = os.environ["ALPACA_API_KEY"]
 ALPACA_SECRET_KEY: str = os.environ["ALPACA_SECRET_KEY"]
 ALPACA_PAPER: bool = True  # HARDCODED — never change
 
+# External data
+NEWS_API_KEY: str = os.getenv("NEWS_API_KEY", "")
+POLYGON_API_KEY: str = os.getenv("POLYGON_API_KEY", "")
+
 # Ollama
 OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_REASONING_MODEL: str = os.getenv("OLLAMA_REASONING_MODEL", "gemma4:12b")
