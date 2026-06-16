@@ -19,6 +19,88 @@ _DECISION_SCHEMA = {
     "required": ["action", "confidence", "reasoning", "accuracy_review"],
 }
 
+# Per-strategy signal mapping: (sentiment_score, trend) → action recommendation
+# These are DIRECTIVES, not descriptions — they tell the model what to DO.
+_STRATEGY_SIGNALS: dict[str, dict] = {
+    "contrarian": {
+        ("fear_extreme", "down"):  "STRONG BUY — extreme fear + downtrend: classic contrarian capitulation entry",
+        ("fear_extreme", "other"): "BUY — extreme fear: crowd is maximally wrong, contrarian opportunity",
+        ("fear", "any"):           "BUY — market fear/selling: contrarian edge, expect mean reversion",
+        ("greed_extreme", "up"):   "STRONG SELL — extreme greed + uptrend: classic contrarian distribution exit",
+        ("greed_extreme", "other"):"SELL — extreme greed: crowd is maximally optimistic, contrarian exit",
+        ("greed", "any"):          "SELL — market greed/buying: contrarian distribution phase",
+        ("neutral", "any"):        "HOLD — neutral sentiment, no contrarian edge",
+    },
+    "trend_following": {
+        ("fear_extreme", "down"):  "SELL — downtrend confirmed + extreme fear: trend broken, exit position",
+        ("fear", "down"):          "SELL — downtrend with negative sentiment: trend is your enemy here",
+        ("fear", "any"):           "HOLD — sentiment negative but trend unclear, wait for direction",
+        ("greed_extreme", "up"):   "BUY — uptrend confirmed + strong sentiment: trend intact, ride it",
+        ("greed", "up"):           "BUY — uptrend with positive sentiment: trend is your friend",
+        ("greed", "any"):          "HOLD — positive sentiment but trend unclear, wait for breakout",
+        ("neutral", "up"):         "BUY — uptrend intact: trend is your friend even without sentiment",
+        ("neutral", "down"):       "SELL — downtrend active: exit regardless of neutral sentiment",
+        ("neutral", "any"):        "HOLD — no clear trend, preserve capital",
+    },
+    "momentum": {
+        ("fear_extreme", "down"):  "SELL IMMEDIATELY — extreme fear + downtrend: momentum has reversed violently, exit",
+        ("fear", "down"):          "SELL — momentum lost: negative sentiment + downtrend, get out",
+        ("fear", "any"):           "HOLD — momentum unclear, no entry",
+        ("greed_extreme", "up"):   "BUY — peak momentum: strong sentiment + uptrend, ride the acceleration",
+        ("greed", "up"):           "BUY — momentum building: buy before the crowd accelerates further",
+        ("greed", "any"):          "HOLD — positive but no clear uptrend, momentum unconfirmed",
+        ("neutral", "any"):        "HOLD — no momentum signal, stay flat",
+    },
+    "value": {
+        ("fear_extreme", "down"):  "BUY — price likely well below MA5 + extreme fear: irrational selling, value entry",
+        ("fear", "any"):           "BUY — market fear punishing price below fair value: mean reversion opportunity",
+        ("greed_extreme", "up"):   "SELL — price likely above MA5 + extreme greed: value fully priced, take profit",
+        ("greed", "any"):          "SELL — positive sentiment suggests price at or above fair value: distribute",
+        ("neutral", "any"):        "HOLD — price near fair value (MA5), no value edge",
+    },
+    "defensive": {
+        ("fear_extreme", "down"):  "SELL — extreme fear + downtrend: if holding, cut losses now",
+        ("fear", "down"):          "SELL — negative sentiment + downtrend: capital preservation, exit",
+        ("fear", "any"):           "HOLD — uncertainty, stay flat unless position in loss",
+        ("greed_extreme", "up"):   "HOLD or SELL — if holding with profit: take it now before reversal",
+        ("greed", "any"):          "HOLD — slight positive, not enough confidence for new entry in defensive mode",
+        ("neutral", "any"):        "HOLD — defensive mode default: cash is a position",
+    },
+    "scalping": {
+        ("fear_extreme", "down"):  "SELL — extreme fear divergence from prior trend: quick scalp exit",
+        ("fear", "any"):           "BUY — short-term fear dip: scalp entry, tight exit target",
+        ("greed_extreme", "up"):   "SELL — extreme greed peak: scalp exit, take the small profit now",
+        ("greed", "any"):          "SELL if holding — sentiment peaked: scalp profit before reversal",
+        ("neutral", "any"):        "HOLD — no scalping signal, flat market",
+    },
+}
+
+
+def _get_strategy_signal(strategy_id: str, sentiment_score: float, trend: str) -> str:
+    """Map sentiment + trend to a strategy-specific action directive."""
+    signals = _STRATEGY_SIGNALS.get(strategy_id, _STRATEGY_SIGNALS["contrarian"])
+
+    if sentiment_score <= -0.4:
+        sentiment_bucket = "fear_extreme"
+    elif sentiment_score <= -0.15:
+        sentiment_bucket = "fear"
+    elif sentiment_score >= 0.4:
+        sentiment_bucket = "greed_extreme"
+    elif sentiment_score >= 0.15:
+        sentiment_bucket = "greed"
+    else:
+        sentiment_bucket = "neutral"
+
+    trend_key = trend if trend in ("up", "down") else "any"
+
+    # Try exact match, then fallback to "any" for trend, then to neutral
+    for t in (trend_key, "other", "any"):
+        key = (sentiment_bucket, t)
+        if key in signals:
+            return signals[key]
+
+    return signals.get(("neutral", "any"), "HOLD — no clear signal")
+
 
 class Reasoner:
     def __init__(self) -> None:
@@ -60,52 +142,61 @@ class Reasoner:
             for sym, p in positions.items()
         ) or "none"
 
-        # Factual market signal — interpreted differently by each strategy
-        if sentiment_score <= -0.4 and trend == "down":
-            market_signal = "EXTREME FEAR — sentiment very negative + downtrend active"
-        elif sentiment_score <= -0.2:
-            market_signal = "FEAR — market selling, negative sentiment"
-        elif sentiment_score >= 0.4 and trend == "up":
-            market_signal = "EXTREME GREED — sentiment very positive + uptrend active"
-        elif sentiment_score >= 0.2:
-            market_signal = "GREED — market buying, positive sentiment"
-        else:
-            market_signal = "NEUTRAL — no extreme sentiment signal"
+        strategy = strategy_library.get(strategy_id)
+        action_signal = _get_strategy_signal(strategy_id, sentiment_score, trend)
 
         take_profit_section = (
             f"=== POSITION P&L ===\n{take_profit_hint}\n\n"
             if take_profit_hint else ""
         )
 
-        system_prompt = strategy_library.get(strategy_id)["system_prompt"]
-
         user_prompt = (
-            f"=== MARKET SIGNAL ===\n{market_signal}\n\n"
+            f"=== STRATEGY: {strategy['name'].upper()} ===\n"
+            f"{strategy['system_prompt']}\n\n"
+            f"=== ACTION SIGNAL ===\n"
+            f"{action_signal}\n"
+            f"Sentiment: {sentiment_score:+.2f} ({sentiment_label}) | Trend: {trend}\n\n"
             f"{take_profit_section}"
             f"=== AGENT BEHAVIOUR ===\n{active_prompt}\n\n"
             f"{imitative_hints}\n\n"
             f"=== MARKET DATA ({ticker}) ===\n"
             f"Price: ${price:.2f} (as of {price_timestamp})\n"
             f"MA5: ${ma5:.2f} | Trend: {trend}\n"
-            f"Sentiment: {sentiment_score:+.2f} ({sentiment_label})\n"
             f"Data stale: {stale} (staleness: {staleness_seconds}s)\n\n"
             f"=== PORTFOLIO ===\n"
             f"Cash: ${cash:,.2f} | Mode: {mode}\n"
             f"Positions: {positions_str}\n\n"
             f"=== MEMORY ===\n{memory_context}\n\n"
-            f"Decide: buy, sell, or hold {ticker}. Return valid JSON only."
+            f"YOUR ACTION SIGNAL IS: {action_signal}\n"
+            f"Follow the ACTION SIGNAL above. If you deviate, explain why in reasoning. "
+            f"Return valid JSON only."
         )
 
         def _call() -> dict:
             resp = ollama.generate(
                 model=config.OLLAMA_REASONING_MODEL,
-                system=system_prompt,
                 prompt=user_prompt,
                 format=_DECISION_SCHEMA,
                 options={"temperature": 0.2, "num_predict": 300},
                 keep_alive="30s",
             )
             raw = resp.response
+            # Strip any trailing content after the JSON object
+            raw = raw.strip()
+            if raw and raw[0] == "{":
+                # Find the end of the first JSON object
+                depth = 0
+                end = 0
+                for i, ch in enumerate(raw):
+                    if ch == "{":
+                        depth += 1
+                    elif ch == "}":
+                        depth -= 1
+                        if depth == 0:
+                            end = i + 1
+                            break
+                raw = raw[:end] if end > 0 else raw
+
             parsed = json.loads(raw)
             action = parsed.get("action", "hold")
             if action not in ("buy", "sell", "hold"):

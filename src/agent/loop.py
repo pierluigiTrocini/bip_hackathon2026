@@ -56,7 +56,11 @@ class AgentLoop:
         self._pause_requested = False
         self._pending_injection = ""
 
-        self._current_strategy: str = session.get("current_strategy", strategy_library.DEFAULT_STRATEGY)
+        _saved_strategy = session.get("current_strategy", strategy_library.DEFAULT_STRATEGY)
+        self._current_strategy: str = (
+            _saved_strategy if _saved_strategy in strategy_library.get_all()
+            else strategy_library.DEFAULT_STRATEGY
+        )
         self._recent_metrics: list[dict] = []  # rolling window for auto-switch evaluation
 
         # propagate session_id to sub-modules
@@ -517,6 +521,12 @@ class AgentLoop:
                         ticker=ticker,
                         positions=positions,
                         portfolio_value=portfolio_value,
+                    )
+                    self._dashboard.log(
+                        f"  {ticker} → qty calcolata:{qty}  "
+                        f"(cash:${cash:,.0f}  portfolio:${portfolio_value:,.0f}  "
+                        f"prezzo:${price:.2f})",
+                        "info",
                     )
                     if qty > 0:
                         self._dashboard.log(

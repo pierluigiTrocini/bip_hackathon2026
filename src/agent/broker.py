@@ -39,7 +39,7 @@ class Broker:
             owned = (positions or {}).get(ticker, {}).get("qty", 0)
             return max(0, int(owned))
 
-        # BUY: cap both per-order size and per-ticker total exposure
+        # BUY: cap per-order size and per-ticker total exposure
         max_pct = (
             config.MAX_POSITION_PCT_CONSERVATIVE if mode == "conservative"
             else config.MAX_POSITION_PCT_NORMAL
@@ -52,7 +52,14 @@ class Broker:
         ticker_room = max(0.0, effective_portfolio * max_pct - current_value)
 
         budget = min(order_budget, ticker_room)
-        return max(0, int(budget / price))
+        qty = int(budget / price)
+
+        # Fallback: if cap math leaves no room for even 1 share but we have
+        # cash and the ticker isn't fully capped, buy at least 1 share.
+        if qty == 0 and ticker_room > 0 and cash >= price:
+            qty = 1
+
+        return max(0, qty)
 
     def place_order(self, ticker: str, side: str, qty: int) -> dict:
         if not self.is_market_open():
