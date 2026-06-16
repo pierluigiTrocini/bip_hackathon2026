@@ -21,15 +21,38 @@ class Broker:
         except Exception:
             return False
 
-    def compute_qty(self, price: float, cash: float, mode: str) -> int:
+    def compute_qty(
+        self,
+        price: float,
+        cash: float,
+        mode: str,
+        action: str = "buy",
+        ticker: str = "",
+        positions: dict | None = None,
+        portfolio_value: float = 0.0,
+    ) -> int:
         if price <= 0:
             return 0
+
+        if action == "sell":
+            # Only sell shares we actually own — never short
+            owned = (positions or {}).get(ticker, {}).get("qty", 0)
+            return max(0, int(owned))
+
+        # BUY: cap both per-order size and per-ticker total exposure
         max_pct = (
             config.MAX_POSITION_PCT_CONSERVATIVE if mode == "conservative"
             else config.MAX_POSITION_PCT_NORMAL
         )
-        qty = int(cash * max_pct / price)
-        return max(0, qty)
+        order_budget = cash * max_pct
+
+        # Per-ticker concentration cap: existing position + new order ≤ max_pct of portfolio
+        effective_portfolio = portfolio_value if portfolio_value > 0 else cash
+        current_value = (positions or {}).get(ticker, {}).get("market_value", 0.0)
+        ticker_room = max(0.0, effective_portfolio * max_pct - current_value)
+
+        budget = min(order_budget, ticker_room)
+        return max(0, int(budget / price))
 
     def place_order(self, ticker: str, side: str, qty: int) -> dict:
         if not self.is_market_open():

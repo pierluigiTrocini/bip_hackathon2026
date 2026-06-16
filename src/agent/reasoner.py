@@ -18,12 +18,15 @@ _DECISION_SCHEMA = {
 }
 
 _SYSTEM_PROMPT = (
-    "You are a cautious quantitative trading analyst operating on real market data. "
+    "You are a contrarian quantitative trading analyst. "
+    "Your core strategy is CONTRARIAN: buy when the market is fearful and selling, sell when the market is greedy and buying. "
+    "Negative sentiment means fear/panic → the contrarian action is BUY. "
+    "Positive sentiment means greed/euphoria → the contrarian action is SELL. "
+    "The CONTRARIAN SIGNAL in the prompt is your primary decision driver — follow it unless data is stale or confidence is too low. "
     "You NEVER invent, estimate, or recall prices from memory — you only use the data provided in this prompt. "
     "You NEVER fabricate news or sentiment scores. "
     "When data is stale, uncertain, or confidence is low, you hold — not buy or sell. "
-    "Your reasoning must cite specific numbers from the data above. "
-    "If the active strategy (imitative hints) conflicts with the data, state the conflict explicitly. "
+    "Your reasoning must cite the contrarian signal and the specific sentiment score. "
     "Output only valid JSON matching the schema. Max 2 sentences for reasoning, 1 for accuracy_review."
 )
 
@@ -66,8 +69,21 @@ class Reasoner:
             for sym, p in positions.items()
         ) or "none"
 
+        # Contrarian signal: derived from sentiment + trend (opposite of consensus)
+        if sentiment_score <= -0.4 and trend == "down":
+            contrarian_signal = "STRONG BUY — extreme fear + downtrend: classic contrarian entry"
+        elif sentiment_score <= -0.2:
+            contrarian_signal = "BUY — market fear/selling: contrarian opportunity"
+        elif sentiment_score >= 0.4 and trend == "up":
+            contrarian_signal = "STRONG SELL — extreme greed + uptrend: classic contrarian exit"
+        elif sentiment_score >= 0.2:
+            contrarian_signal = "SELL — market greed/buying: contrarian distribution"
+        else:
+            contrarian_signal = "HOLD — neutral sentiment, no clear contrarian edge"
+
         user_prompt = (
             f"{_SYSTEM_PROMPT}\n\n"
+            f"=== CONTRARIAN SIGNAL ===\n{contrarian_signal}\n\n"
             f"=== AGENT BEHAVIOUR ===\n{active_prompt}\n\n"
             f"{imitative_hints}\n\n"
             f"=== MARKET DATA ({ticker}) ===\n"
@@ -79,7 +95,7 @@ class Reasoner:
             f"Cash: ${cash:,.2f} | Mode: {mode}\n"
             f"Positions: {positions_str}\n\n"
             f"=== MEMORY ===\n{memory_context}\n\n"
-            f"Decide: buy, sell, or hold {ticker}. Return valid JSON only."
+            f"Decide: buy, sell, or hold {ticker}. Follow the CONTRARIAN SIGNAL above. Return valid JSON only."
         )
 
         def _call() -> dict:
@@ -107,7 +123,7 @@ class Reasoner:
         try:
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                 fut = pool.submit(_call)
-                result = fut.result(timeout=t_behavior)
+                result = fut.result(timeout=max(t_behavior, 120))
         except concurrent.futures.TimeoutError:
             journal_module.log_error(
                 source="Reasoner", error=f"Timeout after {t_behavior}s for {ticker}",

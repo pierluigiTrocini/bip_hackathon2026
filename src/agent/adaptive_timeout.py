@@ -60,8 +60,14 @@ class AdaptiveTimeout:
     def ping_ollama(self) -> float:
         avg = self._ollama_avg()
         try:
+            import ollama as _ollama
             start = time.monotonic()
-            requests.get(f"{config.OLLAMA_BASE_URL}/api/tags", timeout=5)
+            _ollama.generate(
+                model=config.OLLAMA_REASONING_MODEL,
+                prompt="Reply with: OK",
+                options={"num_predict": 5},
+                keep_alive="30s",
+            )
             latency = time.monotonic() - start
             self.record_ollama_latency(latency)
             return latency

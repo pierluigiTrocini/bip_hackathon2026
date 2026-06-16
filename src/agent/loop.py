@@ -227,7 +227,15 @@ class AgentLoop:
                 decision_source = "agent"
 
                 if action in ("buy", "sell") and decision["confidence"] >= threshold and market_open:
-                    qty = self._broker.compute_qty(price, cash, mode)
+                    qty = self._broker.compute_qty(
+                        price=price,
+                        cash=cash,
+                        mode=mode,
+                        action=action,
+                        ticker=ticker,
+                        positions=positions,
+                        portfolio_value=portfolio_value,
+                    )
                     if qty > 0:
                         self._dashboard.log(
                             f"  {ticker} → [7] invio ordine {action.upper()} qty:{qty}…", "action"
