@@ -64,7 +64,7 @@ def generate_questions(context: dict, t_behavior: int) -> list[str]:
             options={"temperature": 0.7, "num_predict": 200},
             keep_alive="30s",
         )
-        raw = resp.get("response", "{}")
+        raw = resp.response
         questions = json.loads(raw).get("questions", [])
         result = [str(q).strip() for q in questions if q][:4]
         if result:
@@ -103,7 +103,7 @@ def synthesize_prompt(
             options={"temperature": 0.3, "num_predict": 180},
             keep_alive="30s",
         )
-        raw = resp.get("response", "{}")
+        raw = resp.response
         new_prompt = json.loads(raw).get("new_prompt", "").strip()
         if new_prompt:
             return new_prompt

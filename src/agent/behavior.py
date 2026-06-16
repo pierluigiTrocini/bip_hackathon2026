@@ -12,6 +12,7 @@ class BehaviorManager:
         self._initial_prompt: str = session.get("initial_prompt", self._active_prompt)
         self._pending_prompt: str = ""
         self._change_requested: bool = False
+        self._change_lock = threading.Lock()
 
     @property
     def active_prompt(self) -> str:
@@ -26,11 +27,12 @@ class BehaviorManager:
         return self._change_requested
 
     def request_change(self, new_prompt: str) -> bool:
-        if self._change_requested:
-            return False
-        self._pending_prompt = new_prompt
-        self._change_requested = True
-        return True
+        with self._change_lock:
+            if self._change_requested:
+                return False
+            self._pending_prompt = new_prompt
+            self._change_requested = True
+            return True
 
     def apply_change(self, memory_manager, imitative_layer) -> bool:
         t_behavior = self._at.t_behavior()
@@ -76,8 +78,9 @@ class BehaviorManager:
         )
 
     def clear_change_request(self) -> None:
-        self._change_requested = False
-        self._pending_prompt = ""
+        with self._change_lock:
+            self._change_requested = False
+            self._pending_prompt = ""
 
     def increment_change_count(self, session: dict) -> None:
         session["behavior_change_count"] = session.get("behavior_change_count", 0) + 1

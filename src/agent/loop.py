@@ -47,6 +47,8 @@ class AgentLoop:
         self._running = False
         self._cycle = session.get("cycle", 0)
         self._tickers: list[str] = tickers if tickers else config.TICKERS
+        self._interaction_running = False
+        self._interaction_lock = threading.Lock()
 
         # propagate session_id to sub-modules
         sid = session.get("session_id", "")
@@ -95,8 +97,11 @@ class AgentLoop:
                     "\n[bold cyan]Inserisci il nuovo comportamento dell'agente:[/bold cyan]"
                 )
                 if new_prompt:
-                    self._bm.request_change(new_prompt)
-                    d.log(f"  Comportamento in coda: {new_prompt[:70]}", "ok")
+                    ok = self._bm.request_change(new_prompt)
+                    if ok:
+                        d.log(f"  Comportamento in coda: {new_prompt[:70]}", "ok")
+                    else:
+                        d.log("  Cambio già in coda — riprova al prossimo ciclo.", "warn")
                 else:
                     d.log("  Nessuna modifica inserita.", "info")
                 d.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", "info")
@@ -118,12 +123,19 @@ class AgentLoop:
                 new_prompt = synthesize_prompt(
                     context["active_prompt"], questions, answers, t_behavior
                 )
-                self._bm.request_change(new_prompt)
-                d.log(f"  Nuovo comportamento in coda: {new_prompt[:70]}", "ok")
+                ok = self._bm.request_change(new_prompt)
+                if ok:
+                    d.log(f"  Nuovo comportamento in coda: {new_prompt[:70]}", "ok")
+                else:
+                    d.log("  Cambio già in coda — risultato del questionario scartato.", "warn")
                 d.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", "info")
 
         except Exception as exc:
             d.log(f"  Errore interazione background: {exc}", "err")
+        finally:
+            with self._interaction_lock:
+                self._interaction_running = False
+            d.set_interaction_in_progress(False)
 
     def _run_cycle(self) -> None:
         if self._bm.change_requested:
@@ -151,8 +163,13 @@ class AgentLoop:
         veto_triggered = False
         last_entry: dict = {}
         cycle_rows: list[dict] = []  # accumulate per-ticker results for end-of-cycle summary
+        # Safe defaults — overwritten per ticker; guard against empty/all-blacklisted cycles
+        pnl_pct = 0.0
+        cash = 100_000.0
+        portfolio_value = 100_000.0
+        mode = "normal"
 
-        # Extend ticker list with any positions currently held that are NOT in discovery list
+        # Fetch portfolio once per cycle: used both for _extra ticker detection and per-ticker decisions
         _initial_portfolio = self._te.get_portfolio()
         _held = set(
             _initial_portfolio.data.get("positions", {}).keys()
@@ -185,16 +202,16 @@ class AgentLoop:
                 else:
                     self._dashboard.log(f"  {ticker} → prezzo non disponibile (uso cache)", "warn")
 
-                # 2+3. OBSERVE + SENTIMENT (concurrent)
-                self._dashboard.log(f"  {ticker} → [2] recupero bars/news/portfolio…", "info")
-                with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+                # 2+3. OBSERVE + SENTIMENT (concurrent) — portfolio reused from cycle-start fetch
+                self._dashboard.log(f"  {ticker} → [2] recupero bars/news…", "info")
+                with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
                     fut_bars = pool.submit(self._te.get_bars, ticker, 5)
                     fut_news = pool.submit(self._te.get_news, ticker)
-                    fut_portfolio = pool.submit(self._te.get_portfolio)
 
                     bars_result = fut_bars.result(timeout=30)
                     news_result = fut_news.result(timeout=30)
-                    portfolio_result = fut_portfolio.result(timeout=30)
+
+                portfolio_result = _initial_portfolio
 
                 articles = news_result.data.get("articles", []) if news_result.ok else []
                 article_count = len(articles)
@@ -402,16 +419,10 @@ class AgentLoop:
                     ticker=ticker, session_id=session_id,
                 )
 
-        # 10. ADAPTIVE TIMEOUT UPDATE (every 5 cycles)
+        # 10. ADAPTIVE TIMEOUT UPDATE (every 5 cycles) — run in background to avoid blocking
         if self._cycle % 5 == 0:
-            self._dashboard.log("  [10] Ricalibrazione timeout adattivo…", "info")
-            self._at.calibrate()
-            s = self._at.summary()
-            self._dashboard.log(
-                f"  → api_avg:{s['api_avg']:.0f}ms  ollama_avg:{s['ollama_avg']:.0f}ms  "
-                f"t_wait:{s['t_wait']}s  t_behavior:{s['t_behavior']}s",
-                "ok",
-            )
+            self._dashboard.log("  [10] Ricalibrazione timeout adattivo (background)…", "info")
+            threading.Thread(target=self._at.calibrate, daemon=True).start()
 
         # 12. WAIT with user input window (R10: always from adaptive_timeout)
         wait_seconds = 2 if veto_triggered else self._at.t_wait()
@@ -431,27 +442,35 @@ class AgentLoop:
         result = self._dashboard.wait_for_user_input(wait_seconds)
 
         if result["source"] in ("prompt_change", "questionnaire"):
-            # Non-blocking: spawn background thread, cycle continues immediately
-            context = {
-                "active_prompt": active_prompt,
-                "tickers": effective_tickers,
-                "pnl_pct": pnl_pct if cycle_rows else 0.0,
-                "mode": mode if cycle_rows else "normal",
-                "recent_actions": "  ".join(
-                    f"{r['ticker']}:{r['action'].upper()}" for r in cycle_rows[-3:]
-                ),
-            }
-            t = threading.Thread(
-                target=self._run_interaction,
-                args=(result["source"], context),
-                daemon=True,
-            )
-            t.start()
-            mode_label = "prompt" if result["source"] == "prompt_change" else "questionario"
-            self._dashboard.log(
-                f"  Interazione {mode_label} avviata in background — ciclo successivo in corso…",
-                "warn",
-            )
+            with self._interaction_lock:
+                already_running = self._interaction_running
+                if not already_running:
+                    self._interaction_running = True
+
+            if already_running:
+                self._dashboard.log("  Interazione già in corso — attendi che finisca.", "warn")
+            else:
+                self._dashboard.set_interaction_in_progress(True)
+                context = {
+                    "active_prompt": active_prompt,
+                    "tickers": effective_tickers,
+                    "pnl_pct": pnl_pct if cycle_rows else 0.0,
+                    "mode": mode if cycle_rows else "normal",
+                    "recent_actions": "  ".join(
+                        f"{r['ticker']}:{r['action'].upper()}" for r in cycle_rows[-3:]
+                    ),
+                }
+                t = threading.Thread(
+                    target=self._run_interaction,
+                    args=(result["source"], context),
+                    daemon=True,
+                )
+                t.start()
+                mode_label = "prompt" if result["source"] == "prompt_change" else "questionario"
+                self._dashboard.log(
+                    f"  Interazione {mode_label} avviata in background — ciclo successivo in corso…",
+                    "warn",
+                )
         elif result["source"] == "override" and last_entry:
             ov = result["data"]
             self._dashboard.log(

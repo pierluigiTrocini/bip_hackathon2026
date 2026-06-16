@@ -40,6 +40,11 @@ class Dashboard:
         self._t_wait: int = 0
         self._t_behavior: int = 0
         self._api_lag_ms: float = 0.0
+        self._interaction_in_progress: bool = False
+
+    def set_interaction_in_progress(self, value: bool) -> None:
+        with self._lock:
+            self._interaction_in_progress = value
 
     def log(self, msg: str, level: str = "info") -> None:
         color = _STEP_COLORS.get(level, "white")
@@ -142,7 +147,12 @@ class Dashboard:
         return Panel(body, title=header, border_style="blue")
 
     def wait_for_user_input(self, timeout_seconds: int) -> dict:
-        result: dict = {"source": "timeout", "data": {}}
+        # If a background interaction (p/q) is running, skip stdin to avoid concurrent reads
+        with self._lock:
+            _ip = self._interaction_in_progress
+        if _ip:
+            time.sleep(timeout_seconds)
+            return {"source": "timeout", "data": {}}
 
         def _read_input():
             try:
@@ -150,13 +160,15 @@ class Dashboard:
             except (EOFError, KeyboardInterrupt):
                 return None
 
-        with Live(
-            self._build_renderable(timeout_seconds),
-            console=_console,
-            refresh_per_second=1,
-            transient=True,
-        ) as live:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        user_input: str | None = None
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        try:
+            with Live(
+                self._build_renderable(timeout_seconds),
+                console=_console,
+                refresh_per_second=1,
+                transient=True,
+            ) as live:
                 fut = pool.submit(_read_input)
                 deadline = time.monotonic() + timeout_seconds
                 while time.monotonic() < deadline:
@@ -165,12 +177,12 @@ class Dashboard:
                     if fut.done():
                         break
                     time.sleep(0.5)
-
                 try:
                     user_input = fut.result(timeout=0.1)
                 except concurrent.futures.TimeoutError:
-                    fut.cancel()
                     user_input = None
+        finally:
+            pool.shutdown(wait=False)
 
         if user_input is None:
             return {"source": "timeout", "data": {}}
@@ -178,14 +190,21 @@ class Dashboard:
         if user_input == "":
             return {"source": "confirmed", "data": {}}
         if user_input == "p":
-            # Return immediately — caller spawns background prompt thread
             return {"source": "prompt_change", "data": {}}
         if user_input == "q":
-            # Return immediately — caller spawns background questionnaire thread
             return {"source": "questionnaire", "data": {}}
         if user_input == "m":
-            _console.print("[bold yellow]Override manuale[/bold yellow] — inserisci: TICKER SIDE QTY (es: AAPL buy 5)")
-            raw = input("> ").strip().split()
+            _console.print("[bold yellow]Override manuale[/bold yellow] — inserisci: TICKER SIDE QTY (es: AAPL buy 5) [dim](30s)[/dim]")
+            _override_buf: list[str] = []
+            def _get_override():
+                try:
+                    _override_buf.append(input("> ").strip())
+                except (EOFError, KeyboardInterrupt):
+                    pass
+            _ot = threading.Thread(target=_get_override, daemon=True)
+            _ot.start()
+            _ot.join(timeout=30)
+            raw = _override_buf[0].split() if _override_buf else []
             if len(raw) == 3:
                 ticker, side, qty_str = raw
                 try:
@@ -342,13 +361,15 @@ class Dashboard:
             except (EOFError, KeyboardInterrupt):
                 return None
 
-        with Live(
-            _build_confirm_panel(timeout_seconds),
-            console=_console,
-            refresh_per_second=1,
-            transient=True,
-        ) as live:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        user_input: str | None = None
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        try:
+            with Live(
+                _build_confirm_panel(timeout_seconds),
+                console=_console,
+                refresh_per_second=1,
+                transient=True,
+            ) as live:
                 fut = pool.submit(_read_input)
                 deadline = time.monotonic() + timeout_seconds
                 while time.monotonic() < deadline:
@@ -357,12 +378,12 @@ class Dashboard:
                     if fut.done():
                         break
                     time.sleep(0.5)
-
                 try:
                     user_input = fut.result(timeout=0.1)
                 except concurrent.futures.TimeoutError:
-                    fut.cancel()
                     user_input = None
+        finally:
+            pool.shutdown(wait=False)
 
         if user_input is None:
             _console.print(f"[green]✓ Auto-confermati (timeout):[/green] {default_str}")
@@ -441,7 +462,7 @@ class Dashboard:
             f"Cash: ${cash:,.2f}  "
             f"P&L: [{pnl_col}]{pnl_pct:+.2%}[/{pnl_col}]  "
             f"Modalità: {mode_str}{veto_str}\n"
-            f"[dim]Prossimo ciclo tra {wait_seconds}s — INVIO conferma · [m] override · [c] cambia comportamento[/dim]"
+            f"[dim]Prossimo ciclo tra {wait_seconds}s — INVIO conferma · [m] override · [p] prompt · [q] questionario[/dim]"
         )
 
         _console.print(
