@@ -145,6 +145,26 @@ def test_newsapi() -> str:
     return f"status=ok | totalResults={total}"
 
 
+def test_ollama_model(model: str) -> str:
+    import requests
+
+    base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+    # First check the model is available
+    resp = requests.get(f"{base_url}/api/tags", timeout=5)
+    resp.raise_for_status()
+    available = [m["name"] for m in resp.json().get("models", [])]
+    # Normalize: Ollama may store tags as "model:tag" or just "model"
+    found = any(m == model or m.startswith(f"{model}:") or model.startswith(f"{m}:") for m in available)
+    if not found:
+        raise RuntimeError(f"model '{model}' not found — available: {available or 'none'}")
+    # Send a minimal generation request (non-streaming)
+    payload = {"model": model, "prompt": "Reply with the single word OK.", "stream": False}
+    resp = requests.post(f"{base_url}/api/generate", json=payload, timeout=60)
+    resp.raise_for_status()
+    reply = resp.json().get("response", "").strip()[:40]
+    return f"model={model} | reply=\"{reply}\""
+
+
 def test_polygon() -> str:
     import requests
 
@@ -197,6 +217,15 @@ def main() -> None:
         results.append(check("Top business headlines", test_newsapi))
     else:
         print(f"  {SKIP} NEWS_API_KEY not set — add it to .env to test")
+
+    section("Ollama — Local Models (optional)")
+    ollama_models_env = os.getenv("OLLAMA_MODELS", "")
+    ollama_models = [m.strip() for m in ollama_models_env.split(",") if m.strip()]
+    if ollama_models:
+        for ollama_model in ollama_models:
+            results.append(check(f"Ollama {ollama_model}", lambda m=ollama_model: test_ollama_model(m)))
+    else:
+        print(f"  {SKIP} OLLAMA_MODELS not set — add it to .env to test")
 
     section("Polygon.io Market Data (optional)")
     polygon_key = os.getenv("POLYGON_API_KEY")
