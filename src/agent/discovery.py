@@ -9,7 +9,9 @@ Discovery phase — 5-step pipeline:
 """
 import concurrent.futures
 import json
+import os
 import re
+import sys
 from collections import Counter
 
 import requests
@@ -379,6 +381,74 @@ def _build_llm_prompt(
     )
 
 
+# ── Streaming LLM output (gray, self-erasing) ────────────────────────────────
+
+def _stream_llm_gray(model: str, full_prompt: str, format_schema: dict, options: dict) -> str:
+    """
+    Stream Ollama output token-by-token in dark gray, then erase those lines.
+    Only the streamed block is removed — everything above it stays intact.
+    Returns the full accumulated response string.
+    """
+    try:
+        cols = os.get_terminal_size().columns
+    except OSError:
+        cols = 80
+
+    # Header line (included in the erasable block)
+    header = f"\033[90m  ╭─ {model} {'─' * max(0, cols - len(model) - 6)}\n  │ \033[0m"
+    sys.stdout.write(header)
+    sys.stdout.flush()
+
+    full_text = ""
+    # Track lines to erase: 1 for the header line already printed
+    newline_count = 1
+    # Current column position (starts after "  │ " prefix = 4 chars)
+    current_col = 4
+
+    sys.stdout.write("\033[90m")  # switch to dark gray for token output
+    sys.stdout.flush()
+
+    try:
+        for chunk in ollama.generate(
+            model=model,
+            prompt=full_prompt,
+            format=format_schema,
+            options=options,
+            stream=True,
+            keep_alive="30s",
+        ):
+            token = chunk.get("response", "")
+            if not token:
+                continue
+            full_text += token
+            sys.stdout.write(token)
+            sys.stdout.flush()
+
+            # Track cursor position to count actual terminal lines used
+            for ch in token:
+                if ch == "\n":
+                    newline_count += 1
+                    current_col = 0
+                else:
+                    current_col += 1
+                    if current_col >= cols:
+                        newline_count += 1
+                        current_col = 0
+    finally:
+        sys.stdout.write("\033[0m")  # reset color
+        # Ensure we're on a new line before erasing upward
+        if current_col > 0:
+            sys.stdout.write("\n")
+            newline_count += 1
+        sys.stdout.flush()
+
+    # Move cursor up N lines, then clear from cursor to end of screen
+    sys.stdout.write(f"\033[{newline_count}A\033[J")
+    sys.stdout.flush()
+
+    return full_text
+
+
 # ── Main DiscoveryAgent ───────────────────────────────────────────────────────
 
 class DiscoveryAgent:
@@ -396,22 +466,14 @@ class DiscoveryAgent:
             lines.append(line)
         return lines
 
-    def _call_llm(self, llm_prompt: str, t_behavior: int) -> list[dict]:
-        def _call():
-            resp = ollama.generate(
-                model=config.OLLAMA_REASONING_MODEL,
-                prompt=f"{_SYSTEM_PROMPT}\n\n{llm_prompt}",
-                format=_DISCOVERY_SCHEMA,
-                options={"temperature": 0.3, "num_predict": 900},
-                keep_alive="30s",
-            )
-            raw = resp.get("response", "{}")
-            # Robust parse: if truncated JSON, extract completed candidate objects
+    def _call_llm(self, llm_prompt: str, t_behavior: int, stream: bool = False) -> list[dict]:
+        full_prompt = f"{_SYSTEM_PROMPT}\n\n{llm_prompt}"
+        options = {"temperature": 0.3, "num_predict": 900}
+
+        def _parse(raw: str) -> list[dict]:
             try:
-                parsed = json.loads(raw)
-                return parsed.get("candidates", [])
+                return json.loads(raw).get("candidates", [])
             except json.JSONDecodeError:
-                # Recover completed candidate objects from truncated output
                 candidates = []
                 for m in re.finditer(
                     r'\{[^{}]*"ticker"\s*:\s*"([A-Z]{1,5})"[^{}]*"reason"\s*:\s*"([^"]*)"[^{}]*"confidence"\s*:\s*([\d.]+)[^{}]*\}',
@@ -426,6 +488,22 @@ class DiscoveryAgent:
                     except Exception:
                         pass
                 return candidates
+
+        def _call():
+            if stream:
+                raw = _stream_llm_gray(
+                    config.OLLAMA_REASONING_MODEL, full_prompt, _DISCOVERY_SCHEMA, options
+                )
+            else:
+                resp = ollama.generate(
+                    model=config.OLLAMA_REASONING_MODEL,
+                    prompt=full_prompt,
+                    format=_DISCOVERY_SCHEMA,
+                    options=options,
+                    keep_alive="30s",
+                )
+                raw = resp.get("response", "{}")
+            return _parse(raw)
 
         try:
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
@@ -446,6 +524,7 @@ class DiscoveryAgent:
         t_behavior: int,
         dashboard=None,
         max_rounds: int = 3,
+        stream: bool = False,
     ) -> list[dict]:
         """
         Iteratively validate candidates against Alpaca.
@@ -457,6 +536,7 @@ class DiscoveryAgent:
                 dashboard.log(msg, level)
 
         validated: list[dict] = []
+        rejected: list[dict] = []   # failed Alpaca, kept for display only
         seen: set[str] = set()
         excluded: set[str] = set()  # tickers that failed Alpaca check
         pending = list(initial_candidates)
@@ -483,17 +563,29 @@ class DiscoveryAgent:
                 ):
                     continue
 
-                if tool_executor.validate_ticker(ticker):
+                resolved, remapped = tool_executor.resolve_ticker(ticker)
+                if resolved:
                     seen.add(ticker)
+                    seen.add(resolved)
+                    remap_note = f" (rimappato da {ticker})" if remapped else ""
+                    _log(f"  [discovery]   ✓ {resolved}{remap_note} — validato su Alpaca", "ok")
                     validated.append({
-                        "ticker": ticker,
+                        "ticker": resolved,
+                        "original_ticker": ticker if remapped else resolved,
                         "reason": str(c.get("reason", ""))[:120],
                         "confidence": max(0.0, min(1.0, float(c.get("confidence", 0.5)))),
+                        "valid": True,
                     })
-                    _log(f"  [discovery]   ✓ {ticker} — validato su Alpaca", "ok")
                 else:
                     excluded.add(ticker)
-                    _log(f"  [discovery]   ✗ {ticker} — non disponibile su Alpaca, escluso", "warn")
+                    _log(f"  [discovery]   ✗ {ticker} — simbolo non trovato su Alpaca, escluso", "warn")
+                    rejected.append({
+                        "ticker": ticker,
+                        "original_ticker": ticker,
+                        "reason": str(c.get("reason", ""))[:120],
+                        "confidence": max(0.0, min(1.0, float(c.get("confidence", 0.5)))),
+                        "valid": False,
+                    })
 
                 if len(validated) >= _MAX_CANDIDATES:
                     break
@@ -522,12 +614,16 @@ class DiscoveryAgent:
                 f"(round {round_num + 1}, esclusi: {excl_str or 'nessuno'})…",
                 "info",
             )
-            pending = self._call_llm(base_llm_prompt + retry_suffix, t_behavior)
+            pending = self._call_llm(base_llm_prompt + retry_suffix, t_behavior, stream=stream)
             if not pending:
                 _log("  [discovery] LLM non ha proposto ulteriori candidati.", "warn")
                 break
 
-        return sorted(validated, key=lambda x: x["confidence"], reverse=True)
+        # Valid candidates first (sorted by confidence), then rejected ones for display
+        return (
+            sorted(validated, key=lambda x: x["confidence"], reverse=True)
+            + sorted(rejected, key=lambda x: x["confidence"], reverse=True)
+        )
 
     def discover(
         self,
@@ -600,7 +696,8 @@ class DiscoveryAgent:
             "info",
         )
         llm_prompt = _build_llm_prompt(prompt, news_articles, ranked, alpaca_headlines, company_names)
-        raw_candidates = self._call_llm(llm_prompt, t_behavior)
+        interactive = dashboard is not None
+        raw_candidates = self._call_llm(llm_prompt, t_behavior, stream=interactive)
         _log(
             f"  [discovery] LLM ha proposto {len(raw_candidates)} candidati: "
             + ", ".join(c.get("ticker", "?") for c in raw_candidates),
@@ -609,7 +706,8 @@ class DiscoveryAgent:
 
         # ── Step 4: iterative Alpaca validation (up to 3 rounds) ─────────────
         validated = self._iterative_validate(
-            raw_candidates, llm_prompt, tool_executor, t_behavior, dashboard, max_rounds=3
+            raw_candidates, llm_prompt, tool_executor, t_behavior, dashboard,
+            max_rounds=3, stream=interactive,
         )
         _log(
             f"  [discovery] Ticker finali validati ({len(validated)}): "
@@ -617,8 +715,16 @@ class DiscoveryAgent:
             "ok" if len(validated) >= _MIN_CANDIDATES else "warn",
         )
 
+        # Split valid from rejected for logging and fallback logic
+        valid_only = [c for c in validated if c.get("valid", True)]
+        _log(
+            f"  [discovery] Ticker finali validati ({len(valid_only)}): "
+            + ", ".join(c["ticker"] for c in valid_only),
+            "ok" if len(valid_only) >= _MIN_CANDIDATES else "warn",
+        )
+
         # ── Fallback silenzioso a config.TICKERS ──────────────────────────────
-        if len(validated) < _MIN_CANDIDATES:
+        if len(valid_only) < _MIN_CANDIDATES:
             journal_module.log_error(
                 source="DiscoveryAgent",
                 error=f"Only {len(validated)} valid ticker(s) after all rounds; "
@@ -635,10 +741,13 @@ class DiscoveryAgent:
                 if t not in existing:
                     validated.append({
                         "ticker": t,
+                        "original_ticker": t,
                         "reason": "Ticker di default (fallback automatico)",
                         "confidence": 0.4,
+                        "valid": True,
                     })
-                if len(validated) >= _MIN_CANDIDATES:
+                    existing.add(t)
+                if len([c for c in validated if c.get("valid", True)]) >= _MIN_CANDIDATES:
                     break
 
         return validated

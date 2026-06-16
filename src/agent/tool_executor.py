@@ -249,6 +249,59 @@ class ToolExecutor:
         except Exception:
             return False
 
+    def _alpaca_canonical_symbol(self, ticker: str) -> str | None:
+        """
+        Ask Alpaca for the canonical symbol of a ticker string.
+        Returns the symbol as Alpaca knows it, or None if not found.
+        Handles format variants (e.g. BRKB → BRK.B).
+        """
+        try:
+            import requests as req_lib
+            resp = req_lib.get(
+                f"https://paper-api.alpaca.markets/v2/assets/{ticker}",
+                headers={
+                    "APCA-API-KEY-ID": config.ALPACA_API_KEY,
+                    "APCA-API-SECRET-KEY": config.ALPACA_SECRET_KEY,
+                },
+                timeout=6,
+            )
+            if resp.status_code == 200:
+                asset = resp.json()
+                if asset.get("tradable") and asset.get("status") == "active":
+                    return str(asset["symbol"])
+        except Exception:
+            pass
+        return None
+
+    def resolve_ticker(self, ticker: str) -> tuple[str | None, bool]:
+        """
+        Try to find a valid, tradeable Alpaca symbol for *ticker*.
+
+        Resolution order:
+          1. Direct price fetch (ticker as-is)
+          2. Alpaca asset lookup → get canonical symbol (handles format variants
+             like BRKB→BRK.B, case normalisation, etc.)
+          3. Price fetch on canonical symbol
+
+        Returns (resolved_symbol, was_remapped):
+          - (ticker, False)   if ticker itself is valid
+          - (canonical, True) if ticker was remapped to its canonical form
+          - (None, False)     if no valid symbol found
+        """
+        ticker = ticker.upper().strip()
+
+        # Step 1: try as-is
+        if self.validate_ticker(ticker):
+            return ticker, False
+
+        # Step 2: ask Alpaca for the canonical form
+        canonical = self._alpaca_canonical_symbol(ticker)
+        if canonical and canonical != ticker:
+            if self.validate_ticker(canonical):
+                return canonical, True
+
+        return None, False
+
     def is_market_open(self) -> bool:
         try:
             client = self._get_trading_client()

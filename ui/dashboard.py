@@ -197,25 +197,53 @@ class Dashboard:
             padding=(0, 2),
         )
         table.add_column("#", justify="right", min_width=2, style="dim")
-        table.add_column("Ticker", style="bold", min_width=6)
+        table.add_column("Ticker", style="bold", min_width=8)
+        table.add_column("Stato", min_width=10)
         table.add_column("Conf", justify="right", min_width=5)
-        table.add_column("Motivazione", min_width=60, no_wrap=False)
+        table.add_column("Motivazione", min_width=55, no_wrap=False)
 
+        valid_count = 0
+        invalid_count = 0
         for i, c in enumerate(candidates, 1):
+            valid = c.get("valid", True)
             conf = c.get("confidence", 0.0)
             conf_col = "green" if conf >= 0.7 else "yellow" if conf >= 0.4 else "red"
+            original = c.get("original_ticker", c["ticker"])
+
+            if valid:
+                valid_count += 1
+                remapped = original != c["ticker"]
+                ticker_str = (
+                    f"[green]{c['ticker']}[/green] [dim](← {original})[/dim]"
+                    if remapped
+                    else f"[green]{c['ticker']}[/green]"
+                )
+                status_str = "[green]✓ valido[/green]"
+            else:
+                invalid_count += 1
+                ticker_str = f"[dark_orange]{c['ticker']}[/dark_orange]"
+                status_str = "[dark_orange]✗ non trovato[/dark_orange]"
+                conf_col = "dark_orange"
+
             table.add_row(
                 str(i),
-                c["ticker"],
+                ticker_str,
+                status_str,
                 f"[{conf_col}]{conf:.2f}[/{conf_col}]",
                 c.get("reason", ""),
             )
 
+        subtitle = (
+            f"[dim]Basato sul tuo prompt e sulle news di mercato — "
+            f"[green]{valid_count} validi[/green]"
+            + (f"  [dark_orange]{invalid_count} non trovati su Alpaca[/dark_orange]" if invalid_count else "")
+            + "[/dim]"
+        )
         _console.print(
             Panel(
                 table,
                 title="[bold magenta]◆ DISCOVERY — Ticker candidati[/bold magenta]",
-                subtitle="[dim]Basato sul tuo prompt e sulle news di mercato[/dim]",
+                subtitle=subtitle,
                 border_style="magenta",
                 padding=(1, 2),
             )
@@ -229,7 +257,7 @@ class Dashboard:
           {"action": "confirm", "tickers": [...]}
           {"action": "reprompt", "new_prompt": "..."}
         """
-        default = [c["ticker"] for c in candidates]
+        default = [c["ticker"] for c in candidates if c.get("valid", True)]
         default_str = ", ".join(default)
         _console.print(
             f"\n[bold]Ticker proposti dall'agente:[/bold] [cyan]{default_str}[/cyan]\n"
