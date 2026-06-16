@@ -221,17 +221,20 @@ class Dashboard:
             )
         )
 
-    def confirm_tickers(self, candidates: list[dict]) -> list[str]:
+    def confirm_or_reprompt(self, candidates: list[dict]) -> dict:
         """
-        Ask the user to confirm the proposed ticker list or provide a custom one.
-        Returns the final list of ticker strings.
+        Show the proposed ticker list and ask the user to confirm or provide a new prompt.
+
+        Returns:
+          {"action": "confirm", "tickers": [...]}
+          {"action": "reprompt", "new_prompt": "..."}
         """
         default = [c["ticker"] for c in candidates]
         default_str = ", ".join(default)
         _console.print(
-            f"\n[bold]Ticker selezionati dall'agente:[/bold] [cyan]{default_str}[/cyan]\n"
-            f"  [dim]Premi INVIO per confermare, oppure inserisci una lista personalizzata "
-            f"(es: AAPL MSFT TSLA):[/dim]"
+            f"\n[bold]Ticker proposti dall'agente:[/bold] [cyan]{default_str}[/cyan]\n"
+            f"  [dim]Premi INVIO per confermare, oppure inserisci un nuovo prompt "
+            f"per avviare una nuova ricerca:[/dim]"
         )
         try:
             raw = input("> ").strip()
@@ -240,18 +243,12 @@ class Dashboard:
 
         if not raw:
             _console.print(f"[green]✓ Confermati:[/green] {default_str}")
-            return default
+            return {"action": "confirm", "tickers": default}
 
-        # Parse space- or comma-separated uppercase tickers
-        tokens = re.split(r"[\s,]+", raw.upper())
-        custom = [t for t in tokens if re.fullmatch(r"[A-Z]{1,5}", t)]
-        if not custom:
-            _console.print(f"[yellow]Input non valido — uso la lista proposta: {default_str}[/yellow]")
-            return default
-
-        result_str = ", ".join(custom)
-        _console.print(f"[green]✓ Lista personalizzata:[/green] {result_str}")
-        return custom
+        _console.print(
+            f"[yellow]Nuovo prompt ricevuto — riavvio discovery:[/yellow] {raw}"
+        )
+        return {"action": "reprompt", "new_prompt": raw}
 
     def print_cycle_summary(
         self,

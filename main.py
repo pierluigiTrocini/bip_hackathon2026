@@ -103,14 +103,31 @@ def main():
     else:
         dashboard.log("", "info")
         dashboard.log("━━━ FASE DI DISCOVERY ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", "info")
-        dashboard.log(f"Prompt ricevuto: \"{prompt[:100]}\"", "info")
-        dashboard.log("Analisi news di mercato e selezione ticker in corso…", "info")
 
         t_behavior = adaptive_timeout.t_behavior()
-        candidates = discovery_agent.discover(prompt, tool_executor, t_behavior, dashboard)
+        discovery_prompt = prompt
+        confirmed_tickers: list[str] = []
 
-        dashboard.print_discovery_candidates(candidates)
-        confirmed_tickers = dashboard.confirm_tickers(candidates)
+        while True:
+            dashboard.log(f"Prompt: \"{discovery_prompt[:100]}\"", "info")
+            dashboard.log("Analisi news di mercato e selezione ticker in corso…", "info")
+
+            candidates = discovery_agent.discover(
+                discovery_prompt, tool_executor, t_behavior, dashboard
+            )
+            dashboard.print_discovery_candidates(candidates)
+            result = dashboard.confirm_or_reprompt(candidates)
+
+            if result["action"] == "confirm":
+                confirmed_tickers = result["tickers"]
+                break
+
+            # User provided a new prompt — restart discovery
+            discovery_prompt = result["new_prompt"]
+            session["active_prompt"] = discovery_prompt
+            dashboard.log("", "info")
+            dashboard.log("━━━ NUOVA DISCOVERY ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", "info")
+
         session["tickers"] = confirmed_tickers
         session_mgr.save(session)
 

@@ -438,23 +438,96 @@ class DiscoveryAgent:
             )
             return []
 
-    def _validate_candidates(self, candidates: list[dict], tool_executor) -> list[dict]:
-        valid: list[dict] = []
+    def _iterative_validate(
+        self,
+        initial_candidates: list[dict],
+        base_llm_prompt: str,
+        tool_executor,
+        t_behavior: int,
+        dashboard=None,
+        max_rounds: int = 3,
+    ) -> list[dict]:
+        """
+        Iteratively validate candidates against Alpaca.
+        On each round: validate remaining candidates, then ask LLM for alternatives
+        to replace any that failed, until _MAX_CANDIDATES are collected or rounds run out.
+        """
+        def _log(msg: str, level: str = "info") -> None:
+            if dashboard:
+                dashboard.log(msg, level)
+
+        validated: list[dict] = []
         seen: set[str] = set()
-        for c in candidates:
-            ticker = str(c.get("ticker", "")).upper().strip()
-            if not ticker or not re.fullmatch(r"[A-Z]{1,5}", ticker):
-                continue
-            if ticker in seen or ticker in _TICKER_FALSE_POSITIVES:
-                continue
-            reason = str(c.get("reason", ""))[:120]
-            confidence = max(0.0, min(1.0, float(c.get("confidence", 0.5))))
-            if tool_executor.validate_ticker(ticker):
-                seen.add(ticker)
-                valid.append({"ticker": ticker, "reason": reason, "confidence": confidence})
-            if len(valid) >= _MAX_CANDIDATES:
+        excluded: set[str] = set()  # tickers that failed Alpaca check
+        pending = list(initial_candidates)
+
+        for round_num in range(1, max_rounds + 1):
+            if not pending:
                 break
-        return sorted(valid, key=lambda x: x["confidence"], reverse=True)
+
+            need = _MAX_CANDIDATES - len(validated)
+            _log(
+                f"  [discovery] Validazione round {round_num}/{max_rounds} — "
+                f"{len(pending)} candidati da verificare, {need} ancora necessari…",
+                "info",
+            )
+
+            for c in pending:
+                ticker = str(c.get("ticker", "")).upper().strip()
+                if (
+                    not ticker
+                    or not re.fullmatch(r"[A-Z]{1,5}", ticker)
+                    or ticker in seen
+                    or ticker in excluded
+                    or ticker in _TICKER_FALSE_POSITIVES
+                ):
+                    continue
+
+                if tool_executor.validate_ticker(ticker):
+                    seen.add(ticker)
+                    validated.append({
+                        "ticker": ticker,
+                        "reason": str(c.get("reason", ""))[:120],
+                        "confidence": max(0.0, min(1.0, float(c.get("confidence", 0.5)))),
+                    })
+                    _log(f"  [discovery]   ✓ {ticker} — validato su Alpaca", "ok")
+                else:
+                    excluded.add(ticker)
+                    _log(f"  [discovery]   ✗ {ticker} — non disponibile su Alpaca, escluso", "warn")
+
+                if len(validated) >= _MAX_CANDIDATES:
+                    break
+
+            _log(
+                f"  [discovery] Round {round_num} completato — "
+                f"validi: {len(validated)}  esclusi: {len(excluded)}",
+                "ok" if validated else "warn",
+            )
+
+            if len(validated) >= _MAX_CANDIDATES or round_num >= max_rounds:
+                break
+
+            # Not enough yet — ask LLM for alternatives, excluding known failures
+            need = _MAX_CANDIDATES - len(validated)
+            excl_str = ", ".join(sorted(excluded))
+            seen_str = ", ".join(sorted(seen))
+            retry_suffix = (
+                f"\n\n=== TICKERS ESCLUSI (non disponibili su Alpaca) ===\n{excl_str}\n"
+                f"=== TICKER GIÀ SELEZIONATI ===\n{seen_str}\n"
+                f"IMPORTANTE: NON riproporre nessuno dei ticker sopra. "
+                f"Suggerisci {need} ticker ALTERNATIVI diversi da tutti quelli elencati."
+            )
+            _log(
+                f"  [discovery] Cerco {need} ticker alternativi "
+                f"(round {round_num + 1}, esclusi: {excl_str or 'nessuno'})…",
+                "info",
+            )
+            pending = self._call_llm(base_llm_prompt + retry_suffix, t_behavior)
+            if not pending:
+                _log("  [discovery] LLM non ha proposto ulteriori candidati.", "warn")
+                break
+
+        return sorted(validated, key=lambda x: x["confidence"], reverse=True)
 
     def discover(
         self,
@@ -464,8 +537,9 @@ class DiscoveryAgent:
         dashboard=None,
     ) -> list[dict]:
         """
-        Full 5-step discovery pipeline. Returns validated candidate list.
-        Falls back to config.TICKERS if fewer than _MIN_CANDIDATES survive.
+        Full discovery pipeline with iterative Alpaca validation.
+        Returns validated candidate list (falls back silently to config.TICKERS
+        if fewer than _MIN_CANDIDATES survive all rounds).
         """
 
         def _log(msg: str, level: str = "info") -> None:
@@ -481,7 +555,6 @@ class DiscoveryAgent:
         en_terms = _extract_english_search_terms(prompt, t_behavior)
         _log(f"  [discovery] Termini EN: {', '.join(en_terms)}", "info")
 
-        # Raw keywords (any language) for Alpaca news filter
         raw_keywords = _extract_keywords(prompt)
 
         # ── Step 1a: fetch news + Alpaca headlines + Polygon sector (parallel) ──
@@ -521,7 +594,7 @@ class DiscoveryAgent:
         else:
             _log("  [discovery] Nessun candidato Polygon.", "warn")
 
-        # ── Step 4: LLM selection ──────────────────────────────────────────────
+        # ── Step 3: LLM initial selection ─────────────────────────────────────
         _log(
             f"  [discovery] {config.OLLAMA_REASONING_MODEL} seleziona i ticker…",
             "info",
@@ -534,33 +607,38 @@ class DiscoveryAgent:
             "info",
         )
 
-        # ── Step 5: validate on Alpaca ────────────────────────────────────────
-        _log("  [discovery] Validazione ticker su Alpaca…", "info")
-        validated = self._validate_candidates(raw_candidates, tool_executor)
+        # ── Step 4: iterative Alpaca validation (up to 3 rounds) ─────────────
+        validated = self._iterative_validate(
+            raw_candidates, llm_prompt, tool_executor, t_behavior, dashboard, max_rounds=3
+        )
         _log(
-            f"  [discovery] Ticker validati: {', '.join(c['ticker'] for c in validated)}",
-            "ok" if validated else "warn",
+            f"  [discovery] Ticker finali validati ({len(validated)}): "
+            + ", ".join(c["ticker"] for c in validated),
+            "ok" if len(validated) >= _MIN_CANDIDATES else "warn",
         )
 
-        # ── Fallback ──────────────────────────────────────────────────────────
+        # ── Fallback silenzioso a config.TICKERS ──────────────────────────────
         if len(validated) < _MIN_CANDIDATES:
             journal_module.log_error(
                 source="DiscoveryAgent",
-                error=f"Only {len(validated)} valid ticker(s) after discovery; "
+                error=f"Only {len(validated)} valid ticker(s) after all rounds; "
                       "falling back to config.TICKERS",
                 session_id=self._session_id,
             )
             _log(
-                "  [discovery] Ticker insufficienti — fallback su config.TICKERS.",
+                f"  [discovery] Solo {len(validated)} ticker trovati — "
+                "integro con i ticker di default.",
                 "warn",
             )
-            validated = [
-                {
-                    "ticker": t,
-                    "reason": "Ticker di default (discovery fallback)",
-                    "confidence": 0.5,
-                }
-                for t in config.TICKERS
-            ]
+            existing = {c["ticker"] for c in validated}
+            for t in config.TICKERS:
+                if t not in existing:
+                    validated.append({
+                        "ticker": t,
+                        "reason": "Ticker di default (fallback automatico)",
+                        "confidence": 0.4,
+                    })
+                if len(validated) >= _MIN_CANDIDATES:
+                    break
 
         return validated
