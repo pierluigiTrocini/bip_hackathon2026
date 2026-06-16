@@ -14,6 +14,15 @@ from rich.text import Text
 
 _console = Console()
 
+_STEP_COLORS = {
+    "info":    "cyan",
+    "ok":      "green",
+    "warn":    "yellow",
+    "err":     "red",
+    "action":  "bold magenta",
+    "wait":    "dim",
+}
+
 
 def _now_ts() -> str:
     return datetime.now(timezone.utc).strftime("%H:%M:%S")
@@ -30,6 +39,10 @@ class Dashboard:
         self._t_wait: int = 0
         self._t_behavior: int = 0
         self._api_lag_ms: float = 0.0
+
+    def log(self, msg: str, level: str = "info") -> None:
+        color = _STEP_COLORS.get(level, "white")
+        _console.print(f"[dim]{_now_ts()}[/dim]  [{color}]{msg}[/{color}]")
 
     def update(self, ticker: str, entry: dict, portfolio: dict, t_wait: int, t_behavior: int) -> None:
         with self._lock:

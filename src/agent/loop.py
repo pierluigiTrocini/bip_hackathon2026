@@ -77,7 +77,9 @@ class AgentLoop:
 
     def _run_cycle(self) -> None:
         if self._bm.change_requested:
+            self._dashboard.log("Applicazione cambio comportamento…", "warn")
             self._handle_behavior_change()
+            self._dashboard.log(f"Comportamento aggiornato → {self._bm.active_prompt[:60]}", "ok")
 
         self._cycle += 1
         self._session["cycle"] = self._cycle
@@ -87,21 +89,39 @@ class AgentLoop:
         t_behavior = self._at.t_behavior()
         market_open = self._te.is_market_open()
 
+        tickers_str = ", ".join(config.TICKERS)
+        mkt_str = "APERTO" if market_open else "CHIUSO"
+        self._dashboard.log(
+            f"── Ciclo {self._cycle} ─────────────────  "
+            f"mercato:{mkt_str}  t_wait:{t_wait}s  t_behavior:{t_behavior}s  "
+            f"ticker:[{tickers_str}]",
+            "info",
+        )
+
         veto_triggered = False
         last_entry: dict = {}
 
         for ticker in config.TICKERS:
             if ticker in self._te._blacklisted:
+                self._dashboard.log(f"  {ticker} → blacklistato, skip", "warn")
                 continue
             try:
                 # 1. OUTCOME UPDATE
+                self._dashboard.log(f"  {ticker} → [1] recupero prezzo corrente…", "info")
                 price_result = self._te.get_price(ticker)
                 if price_result.ok:
                     journal_module.outcome_update(
                         ticker, price_result.data["price"], session_id
                     )
+                    stale_tag = " [STALE]" if price_result.stale else ""
+                    self._dashboard.log(
+                        f"  {ticker} → prezzo ${price_result.data['price']:,.2f}{stale_tag}", "ok"
+                    )
+                else:
+                    self._dashboard.log(f"  {ticker} → prezzo non disponibile (uso cache)", "warn")
 
                 # 2+3. OBSERVE + SENTIMENT (concurrent)
+                self._dashboard.log(f"  {ticker} → [2] recupero bars/news/portfolio…", "info")
                 with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
                     fut_bars = pool.submit(self._te.get_bars, ticker, 5)
                     fut_news = pool.submit(self._te.get_news, ticker)
@@ -112,8 +132,22 @@ class AgentLoop:
                     portfolio_result = fut_portfolio.result(timeout=30)
 
                 articles = news_result.data.get("articles", []) if news_result.ok else []
+                article_count = len(articles)
+                self._dashboard.log(
+                    f"  {ticker} → bars:{'ok' if bars_result.ok else 'err'}  "
+                    f"news:{article_count} articoli  "
+                    f"portfolio:{'ok' if portfolio_result.ok else 'err'}",
+                    "ok" if (bars_result.ok and portfolio_result.ok) else "warn",
+                )
+
+                self._dashboard.log(f"  {ticker} → [3] analisi sentiment ({article_count} art.)…", "info")
                 from src.agent import sentiment as sentiment_module
                 sentiment_data = sentiment_module.analyse(ticker, articles, active_prompt, t_behavior)
+                self._dashboard.log(
+                    f"  {ticker} → sentiment: {sentiment_data['label']} "
+                    f"({sentiment_data['score']:+.2f})",
+                    "ok",
+                )
 
                 # 4. PORTFOLIO HEALTH CHECK
                 pnl_pct = portfolio_result.data.get("pnl_pct", 0.0) if portfolio_result.ok else 0.0
@@ -123,6 +157,11 @@ class AgentLoop:
                 portfolio_value = portfolio_result.data.get("portfolio_value", 100_000.0) if portfolio_result.ok else 100_000.0
                 portfolio_mode_reason = (
                     f"drawdown {pnl_pct:.2%}" if mode == "conservative" else None
+                )
+                self._dashboard.log(
+                    f"  {ticker} → modalità:{mode.upper()}  P&L:{pnl_pct:+.2%}  "
+                    f"cash:${cash:,.0f}  portfolio:${portfolio_value:,.0f}",
+                    "warn" if mode == "conservative" else "info",
                 )
 
                 # 5. MEMORY CONTEXT
@@ -139,7 +178,15 @@ class AgentLoop:
                 staleness_seconds = price_result.staleness_seconds if not price_result.ok else 0
                 data_ok = price_result.ok
 
+                strat_str = f"  strategia:{imitative_source}" if imitative_source else ""
+                self._dashboard.log(
+                    f"  {ticker} → MA5:${ma5:.2f}  trend:{trend}{strat_str}", "info"
+                )
+
                 # 6. THINK
+                self._dashboard.log(
+                    f"  {ticker} → [6] ragionamento LLM (t_behavior:{t_behavior}s)…", "info"
+                )
                 decision = self._reasoner.decide(
                     ticker=ticker,
                     memory_context=memory_context,
@@ -159,6 +206,14 @@ class AgentLoop:
                     t_behavior=t_behavior,
                 )
 
+                stale_tag = f"  -stale:{decision['stale_penalty']:.2f}" if decision["stale_penalty"] > 0 else ""
+                self._dashboard.log(
+                    f"  {ticker} → decisione:{decision['action'].upper()}  "
+                    f"conf:{decision['confidence']:.2f} (raw:{decision['confidence_raw']:.2f}{stale_tag})  "
+                    f"{decision['reasoning'][:70]}",
+                    "ok",
+                )
+
                 # 7. ACT (R5: confidence gate is code, not prompt)
                 threshold = (
                     config.CONFIDENCE_THRESHOLD_CONSERVATIVE if mode == "conservative"
@@ -171,12 +226,36 @@ class AgentLoop:
                 if action in ("buy", "sell") and decision["confidence"] >= threshold and market_open:
                     qty = self._broker.compute_qty(price, cash, mode)
                     if qty > 0:
+                        self._dashboard.log(
+                            f"  {ticker} → [7] invio ordine {action.upper()} qty:{qty}…", "action"
+                        )
                         order_result = self._broker.place_order(ticker, action, qty)
+                        if order_result.get("ok"):
+                            self._dashboard.log(
+                                f"  {ticker} → ordine accettato (id:{str(order_result.get('order_id','?'))[:8]}…)",
+                                "ok",
+                            )
+                        else:
+                            self._dashboard.log(
+                                f"  {ticker} → ordine rifiutato: {order_result.get('reason','?')}",
+                                "err",
+                            )
                     else:
                         action = "hold"
+                        self._dashboard.log(f"  {ticker} → qty=0, hold forzato", "warn")
                 else:
+                    reasons: list[str] = []
+                    if action not in ("buy", "sell"):
+                        reasons.append(f"azione={action}")
+                    elif decision["confidence"] < threshold:
+                        reasons.append(f"conf {decision['confidence']:.2f} < soglia {threshold:.2f}")
+                    if not market_open:
+                        reasons.append("mercato chiuso")
                     action = "hold"
                     decision_source = "autonomous_timeout"
+                    self._dashboard.log(
+                        f"  {ticker} → HOLD autonomo ({'; '.join(reasons)})", "warn"
+                    )
 
                 # 8. RECORD (R4: every cycle writes an entry)
                 entry = journal_module.build_entry(
@@ -223,8 +302,13 @@ class AgentLoop:
                 # NEWS VETO (step 11 — checked per ticker)
                 if sentiment_data["score"] < -0.7 and ticker in positions and action == "hold":
                     veto_triggered = True
+                    self._dashboard.log(
+                        f"  {ticker} → NEWS VETO attivato (sentiment {sentiment_data['score']:.2f})",
+                        "err",
+                    )
 
             except Exception as exc:
+                self._dashboard.log(f"  {ticker} → ERRORE ciclo: {exc}", "err")
                 journal_module.log_error(
                     source="AgentLoop", error=f"Ticker {ticker} cycle error: {exc}",
                     ticker=ticker, session_id=session_id,
@@ -232,23 +316,44 @@ class AgentLoop:
 
         # 10. ADAPTIVE TIMEOUT UPDATE (every 5 cycles)
         if self._cycle % 5 == 0:
+            self._dashboard.log("  [10] Ricalibrazione timeout adattivo…", "info")
             self._at.calibrate()
+            s = self._at.summary()
+            self._dashboard.log(
+                f"  → api_avg:{s['api_avg']:.0f}ms  ollama_avg:{s['ollama_avg']:.0f}ms  "
+                f"t_wait:{s['t_wait']}s  t_behavior:{s['t_behavior']}s",
+                "ok",
+            )
 
         # 12. WAIT with user input window (R10: always from adaptive_timeout)
         wait_seconds = 2 if veto_triggered else self._at.t_wait()
+        if veto_triggered:
+            self._dashboard.log("  [NEWS VETO] attesa ridotta a 2s", "err")
+        self._dashboard.log(
+            f"── Ciclo {self._cycle} completato. Attesa {wait_seconds}s "
+            f"(INVIO=conferma, m=override, c=comportamento) ─────",
+            "wait",
+        )
         result = self._dashboard.wait_for_user_input(wait_seconds)
 
         if result["source"] == "behavior_change":
             self._bm.request_change(result["data"]["new_prompt"])
+            self._dashboard.log("  Cambio comportamento in coda per il prossimo ciclo.", "warn")
         elif result["source"] == "override" and last_entry:
             ov = result["data"]
+            self._dashboard.log(
+                f"  Override manuale: {ov['ticker']} {ov['action'].upper()} qty:{ov['qty']}", "action"
+            )
             order_result = self._broker.place_order(ov["ticker"], ov["action"], ov["qty"])
-            # Log the override in journal
             ov_entry = dict(last_entry)
             ov_entry["action"] = ov["action"]
             ov_entry["decision_source"] = "user_override"
             ov_entry["order_id"] = order_result.get("order_id")
             ov_entry["ts"] = _now_utc()
             journal_module.write_entry(ov_entry)
+            ok_str = "accettato" if order_result.get("ok") else f"rifiutato: {order_result.get('reason','?')}"
+            self._dashboard.log(f"  Override → {ok_str}", "ok" if order_result.get("ok") else "err")
+        elif result["source"] == "confirmed":
+            self._dashboard.log("  → Confermato dall'utente.", "info")
 
         self._sm.save(self._session)
