@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 
 from src.agent import config
 from src.agent import journal as journal_module
+from src.agent import strategy_library
 from src.agent.adaptive_timeout import AdaptiveTimeout
 from src.agent.behavior import BehaviorManager
 from src.agent.broker import Broker
@@ -51,9 +52,12 @@ class AgentLoop:
         self._tickers: list[str] = tickers if tickers else config.TICKERS
         self._interaction_running = False
         self._interaction_lock = threading.Lock()
-        self._in_wait_phase = False       # True while wait_for_user_input or _run_interaction owns stdin
-        self._pause_requested = False     # set by _stdin_listener when user types mid-cycle
-        self._pending_injection = ""      # text captured by _stdin_listener
+        self._in_wait_phase = False
+        self._pause_requested = False
+        self._pending_injection = ""
+
+        self._current_strategy: str = session.get("current_strategy", strategy_library.DEFAULT_STRATEGY)
+        self._recent_metrics: list[dict] = []  # rolling window for auto-switch evaluation
 
         # propagate session_id to sub-modules
         sid = session.get("session_id", "")
@@ -61,11 +65,9 @@ class AgentLoop:
         self._reasoner._session_id = sid
         self._broker._session_id = sid
 
+        self._dashboard.set_current_strategy(self._current_strategy)
+
     def _stdin_listener(self) -> None:
-        """Background thread: captures free-text input typed during cycle execution.
-        Pauses automatically when _in_wait_phase is True (stdin owned by wait/interaction).
-        Triggers _pause_requested so _run_cycle can stop between tickers and handle it.
-        """
         while self._running:
             if self._in_wait_phase or self._pause_requested:
                 time.sleep(0.1)
@@ -110,7 +112,6 @@ class AgentLoop:
         self._broker.cancel_all_orders()
 
     def _handle_mid_cycle_injection(self, active_prompt: str) -> None:
-        """Called when _stdin_listener captures text mid-cycle. Stops the current cycle."""
         d = self._dashboard
         text = self._pending_injection
         self._pending_injection = ""
@@ -135,8 +136,18 @@ class AgentLoop:
             d.log(f"  Istruzione aggiunta (al prossimo ciclo): {new_prompt[:100]}", "ok")
         d.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", "info")
 
+    def _apply_strategy_switch(self, new_id: str) -> None:
+        old_name = strategy_library.get(self._current_strategy)["name"]
+        new_name = strategy_library.get(new_id)["name"]
+        self._current_strategy = new_id
+        self._session["current_strategy"] = new_id
+        self._dashboard.set_current_strategy(new_id)
+        self._sm.save(self._session)
+        self._dashboard.log(f"  Strategia: {old_name} → {new_name}", "ok")
+        s = strategy_library.get(new_id)
+        self._dashboard.log(f"  Descrizione: {s['description']} — best for: {s['best_for']}", "info")
+
     def _run_interaction(self, mode: str, context: dict) -> None:
-        """Synchronous user interaction (timer has stopped). Applied next cycle."""
         from src.agent.behavior_questionnaire import generate_questions, synthesize_prompt
 
         d = self._dashboard
@@ -159,7 +170,7 @@ class AgentLoop:
 
             elif mode == "prompt_change":
                 d.log("", "info")
-                d.log("━━━ MODIFICA COMPORTAMENTO (in background) ━━━━━━━━━━━━━━━━━━━━━━━━━", "warn")
+                d.log("━━━ MODIFICA COMPORTAMENTO ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", "warn")
                 d.log(f"  Prompt attuale: {context['active_prompt'][:80]}", "info")
                 new_prompt = d.interactive_input(
                     "\n[bold cyan]Inserisci il nuovo comportamento dell'agente:[/bold cyan]"
@@ -176,7 +187,7 @@ class AgentLoop:
 
             elif mode == "questionnaire":
                 d.log("", "info")
-                d.log("━━━ QUESTIONARIO STRATEGIA (in background) ━━━━━━━━━━━━━━━━━━━━━━━━", "warn")
+                d.log("━━━ QUESTIONARIO STRATEGIA ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", "warn")
                 d.log("  Generazione domande in corso…", "info")
                 t_behavior = self._at.t_behavior()
                 questions = generate_questions(context, t_behavior)
@@ -186,7 +197,6 @@ class AgentLoop:
                         f"\n[bold cyan]{i}/{len(questions)}.[/bold cyan] {q}"
                     )
                     answers.append(ans if ans else "(nessuna risposta)")
-
                 d.log("  Sintesi delle risposte in corso…", "info")
                 new_prompt = synthesize_prompt(
                     context["active_prompt"], questions, answers, t_behavior
@@ -198,12 +208,84 @@ class AgentLoop:
                     d.log("  Cambio già in coda — risultato del questionario scartato.", "warn")
                 d.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", "info")
 
+            elif mode == "strategy_select":
+                d.log("", "info")
+                d.log("━━━ SELEZIONE STRATEGIA ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", "warn")
+                all_strats = strategy_library.get_all()
+                strat_ids = list(all_strats.keys())
+                for i, sid in enumerate(strat_ids, 1):
+                    s = all_strats[sid]
+                    marker = "  ← ATTIVA" if sid == self._current_strategy else ""
+                    d.log(
+                        f"  [{i}] [bold]{s['name']}[/bold]: {s['description']}"
+                        f"  —  best for: {s['best_for']}{marker}",
+                        "ok" if sid == self._current_strategy else "info",
+                    )
+                choice = d.interactive_input(
+                    "\n[bold cyan]Scegli strategia (numero) o INVIO per annullare:[/bold cyan]"
+                )
+                if choice.strip().isdigit() and 1 <= int(choice.strip()) <= len(strat_ids):
+                    new_id = strat_ids[int(choice.strip()) - 1]
+                    if new_id != self._current_strategy:
+                        self._apply_strategy_switch(new_id)
+                    else:
+                        d.log("  Strategia invariata (stessa selezionata).", "info")
+                else:
+                    d.log("  Selezione annullata — strategia invariata.", "info")
+                d.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", "info")
+
         except Exception as exc:
-            d.log(f"  Errore interazione background: {exc}", "err")
+            d.log(f"  Errore interazione: {exc}", "err")
         finally:
             with self._interaction_lock:
                 self._interaction_running = False
             d.set_interaction_in_progress(False)
+
+    def _check_auto_switch(self) -> None:
+        """Evaluate recent metrics and propose a strategy switch if warranted."""
+        if len(self._recent_metrics) < 5:
+            return
+        window = self._recent_metrics[-5:]
+
+        total_decisions = sum(m["total"] for m in window)
+        if total_decisions == 0:
+            return
+
+        hold_count = sum(m["holds"] for m in window)
+        hold_rate = hold_count / total_decisions
+
+        sentiments = [m["avg_sentiment"] for m in window if m["avg_sentiment"] is not None]
+        avg_sentiment = sum(sentiments) / len(sentiments) if sentiments else 0.0
+
+        trends = [m["dominant_trend"] for m in window]
+        up_count = trends.count("up")
+        down_count = trends.count("down")
+        if up_count >= 3:
+            avg_trend = "up"
+        elif down_count >= 3:
+            avg_trend = "down"
+        else:
+            avg_trend = "flat"
+
+        pnl_values = [m["pnl_pct"] for m in window if m["pnl_pct"] is not None]
+        pnl_trend = 0.0
+        if len(pnl_values) >= 2:
+            pnl_trend = pnl_values[-1] - pnl_values[0]
+
+        new_id, reason = strategy_library.recommend_switch(
+            self._current_strategy, hold_rate, pnl_trend, avg_sentiment, avg_trend
+        )
+        if not new_id:
+            return
+
+        new_name = strategy_library.get(new_id)["name"]
+        self._dashboard.log("", "info")
+        self._dashboard.log(
+            f"  [AUTO-SWITCH] L'agente suggerisce di cambiare strategia → {new_name}", "warn"
+        )
+        accepted = self._dashboard.ask_strategy_switch(new_id, new_name, reason)
+        if accepted:
+            self._apply_strategy_switch(new_id)
 
     def _run_cycle(self) -> None:
         if self._bm.change_requested:
@@ -219,25 +301,24 @@ class AgentLoop:
         t_behavior = self._at.t_behavior()
         market_open = self._te.is_market_open()
 
+        strategy_name = strategy_library.get(self._current_strategy)["name"]
         tickers_str = ", ".join(self._tickers)
         mkt_str = "APERTO" if market_open else "CHIUSO"
         self._dashboard.log(
             f"── Ciclo {self._cycle} ─────────────────  "
-            f"mercato:{mkt_str}  t_wait:{t_wait}s  t_behavior:{t_behavior}s  "
-            f"ticker:[{tickers_str}]",
+            f"mercato:{mkt_str}  strategia:{strategy_name}  "
+            f"t_wait:{t_wait}s  t_behavior:{t_behavior}s  ticker:[{tickers_str}]",
             "info",
         )
 
         veto_triggered = False
         last_entry: dict = {}
-        cycle_rows: list[dict] = []  # accumulate per-ticker results for end-of-cycle summary
-        # Safe defaults — overwritten per ticker; guard against empty/all-blacklisted cycles
+        cycle_rows: list[dict] = []
         pnl_pct = 0.0
         cash = 100_000.0
         portfolio_value = 100_000.0
         mode = "normal"
 
-        # Fetch portfolio once per cycle: used both for _extra ticker detection and per-ticker decisions
         _initial_portfolio = self._te.get_portfolio()
         _held = set(
             _initial_portfolio.data.get("positions", {}).keys()
@@ -253,7 +334,6 @@ class AgentLoop:
 
         _cycle_interrupted = False
         for ticker in effective_tickers:
-            # Mid-cycle stop: user typed something during execution
             if self._pause_requested:
                 self._in_wait_phase = True
                 self._handle_mid_cycle_injection(active_prompt)
@@ -280,12 +360,11 @@ class AgentLoop:
                 else:
                     self._dashboard.log(f"  {ticker} → prezzo non disponibile (uso cache)", "warn")
 
-                # 2+3. OBSERVE + SENTIMENT (concurrent) — portfolio reused from cycle-start fetch
+                # 2+3. OBSERVE + SENTIMENT (concurrent)
                 self._dashboard.log(f"  {ticker} → [2] recupero bars/news…", "info")
                 with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
                     fut_bars = pool.submit(self._te.get_bars, ticker, 5)
                     fut_news = pool.submit(self._te.get_news, ticker)
-
                     bars_result = fut_bars.result(timeout=30)
                     news_result = fut_news.result(timeout=30)
 
@@ -324,12 +403,11 @@ class AgentLoop:
                     "warn" if mode == "conservative" else "info",
                 )
 
-                # 5. MEMORY CONTEXT
+                # 5. MEMORY CONTEXT + UNREALIZED P&L HINT
                 memory_context = self._mm.build_context(ticker)
                 imitative_hints = self._il.build_hints(active_prompt, ticker)
                 imitative_source = self._il.get_active_strategy_id(active_prompt)
 
-                # price data
                 price = price_result.data.get("price", 0.0) if price_result.ok else 0.0
                 price_timestamp = price_result.data.get("timestamp", _now_utc()) if price_result.ok else _now_utc()
                 ma5 = bars_result.data.get("ma", 0.0) if bars_result.ok else 0.0
@@ -338,6 +416,45 @@ class AgentLoop:
                 staleness_seconds = price_result.staleness_seconds if not price_result.ok else 0
                 data_ok = price_result.ok
 
+                # Compute unrealized P&L for held position
+                unrealized_pnl_pct: float | None = None
+                avg_entry_price: float = 0.0
+                take_profit_hint = ""
+                if ticker in positions and price > 0:
+                    pos = positions[ticker]
+                    avg_entry_price = pos.get("avg_entry_price", 0.0)
+                    qty_held = pos.get("qty", 0)
+                    if avg_entry_price > 0 and qty_held > 0:
+                        unrealized_pnl_pct = (price - avg_entry_price) / avg_entry_price
+                        unrealized_value = (price - avg_entry_price) * qty_held
+                        if unrealized_pnl_pct >= 0.02:
+                            take_profit_hint = (
+                                f"You hold {qty_held} shares of {ticker} at avg entry ${avg_entry_price:.2f}. "
+                                f"Current price: ${price:.2f} — unrealized GAIN: {unrealized_pnl_pct:+.1%} (${unrealized_value:+.0f}). "
+                                f"TAKE PROFIT OPPORTUNITY: consider selling to lock in this gain, especially if strategy signals SELL."
+                            )
+                            self._dashboard.log(
+                                f"  {ticker} → posizione in GUADAGNO: {unrealized_pnl_pct:+.1%} "
+                                f"(entry ${avg_entry_price:.2f} → ora ${price:.2f})",
+                                "ok",
+                            )
+                        elif unrealized_pnl_pct <= -0.03:
+                            take_profit_hint = (
+                                f"You hold {qty_held} shares of {ticker} at avg entry ${avg_entry_price:.2f}. "
+                                f"Current price: ${price:.2f} — unrealized LOSS: {unrealized_pnl_pct:+.1%} (${unrealized_value:+.0f}). "
+                                f"STOP LOSS ALERT: consider selling to limit further losses, especially in defensive/trend-following context."
+                            )
+                            self._dashboard.log(
+                                f"  {ticker} → posizione in PERDITA: {unrealized_pnl_pct:+.1%} "
+                                f"(entry ${avg_entry_price:.2f} → ora ${price:.2f})",
+                                "warn",
+                            )
+                        else:
+                            take_profit_hint = (
+                                f"You hold {qty_held} shares of {ticker} at avg entry ${avg_entry_price:.2f}. "
+                                f"Current price: ${price:.2f} — unrealized: {unrealized_pnl_pct:+.1%} (${unrealized_value:+.0f})."
+                            )
+
                 strat_str = f"  strategia:{imitative_source}" if imitative_source else ""
                 self._dashboard.log(
                     f"  {ticker} → MA5:${ma5:.2f}  trend:{trend}{strat_str}", "info"
@@ -345,7 +462,8 @@ class AgentLoop:
 
                 # 6. THINK
                 self._dashboard.log(
-                    f"  {ticker} → [6] ragionamento LLM (t_behavior:{t_behavior}s)…", "info"
+                    f"  {ticker} → [6] ragionamento LLM [{strategy_name}] (t_behavior:{t_behavior}s)…",
+                    "info",
                 )
                 decision = self._reasoner.decide(
                     ticker=ticker,
@@ -364,17 +482,24 @@ class AgentLoop:
                     stale=stale,
                     staleness_seconds=staleness_seconds,
                     t_behavior=t_behavior,
+                    strategy_id=self._current_strategy,
+                    take_profit_hint=take_profit_hint,
                 )
 
                 stale_tag = f"  -stale:{decision['stale_penalty']:.2f}" if decision["stale_penalty"] > 0 else ""
+                action_color = {"buy": "ok", "sell": "err", "hold": "warn"}
                 self._dashboard.log(
-                    f"  {ticker} → decisione:{decision['action'].upper()}  "
-                    f"conf:{decision['confidence']:.2f} (raw:{decision['confidence_raw']:.2f}{stale_tag})  "
-                    f"{decision['reasoning'][:70]}",
-                    "ok",
+                    f"  {ticker} → [{decision['action'].upper()}]  "
+                    f"conf:{decision['confidence']:.2f} (raw:{decision['confidence_raw']:.2f}{stale_tag})",
+                    action_color.get(decision["action"], "info"),
+                )
+                # Full reasoning — always shown, not truncated
+                self._dashboard.log(
+                    f"  {ticker} → PERCHE': {decision['reasoning']}",
+                    "info",
                 )
 
-                # 7. ACT (R5: confidence gate is code, not prompt)
+                # 7. ACT
                 threshold = (
                     config.CONFIDENCE_THRESHOLD_CONSERVATIVE if mode == "conservative"
                     else config.CONFIDENCE_THRESHOLD_NORMAL
@@ -403,6 +528,15 @@ class AgentLoop:
                                 f"  {ticker} → ordine accettato (id:{str(order_result.get('order_id','?'))[:8]}…)",
                                 "ok",
                             )
+                            # Show realized P&L on sell
+                            if action == "sell" and avg_entry_price > 0:
+                                realized_pnl = (price - avg_entry_price) / avg_entry_price
+                                pnl_level = "ok" if realized_pnl >= 0 else "warn"
+                                self._dashboard.log(
+                                    f"  {ticker} → VENDUTO {qty} azioni a ${price:.2f}  "
+                                    f"(entry: ${avg_entry_price:.2f} | P&L: {realized_pnl:+.1%})",
+                                    pnl_level,
+                                )
                         else:
                             self._dashboard.log(
                                 f"  {ticker} → ordine rifiutato: {order_result.get('reason','?')}",
@@ -425,7 +559,7 @@ class AgentLoop:
                         f"  {ticker} → HOLD autonomo ({'; '.join(reasons)})", "warn"
                     )
 
-                # 8. RECORD (R4: every cycle writes an entry)
+                # 8. RECORD
                 entry = journal_module.build_entry(
                     ts=_now_utc(),
                     cycle=self._cycle,
@@ -464,7 +598,6 @@ class AgentLoop:
                 self._mm.update(entry)
                 last_entry = entry
 
-                # accumulate row for end-of-cycle summary
                 cycle_rows.append({
                     "ticker": ticker,
                     "price": price,
@@ -477,12 +610,17 @@ class AgentLoop:
                     "order_id": order_result.get("order_id"),
                     "mode": mode,
                     "stale": stale,
+                    "unrealized_pnl_pct": unrealized_pnl_pct,
+                    "avg_entry_price": avg_entry_price,
                 })
 
                 # 9. UPDATE DASHBOARD
-                self._dashboard.update(ticker, entry, portfolio_result.data if portfolio_result.ok else {}, t_wait, t_behavior)
+                self._dashboard.update(
+                    ticker, entry, portfolio_result.data if portfolio_result.ok else {},
+                    t_wait, t_behavior,
+                )
 
-                # NEWS VETO (step 11 — checked per ticker)
+                # NEWS VETO
                 if sentiment_data["score"] < -0.7 and ticker in positions and action == "hold":
                     veto_triggered = True
                     self._dashboard.log(
@@ -497,12 +635,28 @@ class AgentLoop:
                     ticker=ticker, session_id=session_id,
                 )
 
-        # 10. ADAPTIVE TIMEOUT UPDATE (every 5 cycles) — run in background to avoid blocking
+        # 10. ADAPTIVE TIMEOUT UPDATE
         if self._cycle % 5 == 0:
             self._dashboard.log("  [10] Ricalibrazione timeout adattivo (background)…", "info")
             threading.Thread(target=self._at.calibrate, daemon=True).start()
 
-        # 12. WAIT — skip if cycle was interrupted mid-way by user injection
+        # 11. UPDATE RECENT METRICS for auto-switch
+        if cycle_rows:
+            holds = sum(1 for r in cycle_rows if r["action"] == "hold")
+            sentiments = [r["sentiment_score"] for r in cycle_rows]
+            trends = [r["trend"] for r in cycle_rows]
+            dominant_trend = max(set(trends), key=trends.count) if trends else "flat"
+            self._recent_metrics.append({
+                "cycle": self._cycle,
+                "total": len(cycle_rows),
+                "holds": holds,
+                "avg_sentiment": sum(sentiments) / len(sentiments) if sentiments else None,
+                "dominant_trend": dominant_trend,
+                "pnl_pct": pnl_pct,
+            })
+            if len(self._recent_metrics) > 20:
+                self._recent_metrics = self._recent_metrics[-20:]
+
         if _cycle_interrupted:
             self._dashboard.log("  Ciclo interrotto — nuovo comportamento applicato al prossimo ciclo.", "warn")
             self._sm.save(self._session)
@@ -522,24 +676,30 @@ class AgentLoop:
                 mode=mode,
                 wait_seconds=wait_seconds,
                 veto=veto_triggered,
+                strategy_name=strategy_name,
             )
 
-        # Pause stdin listener during wait + interaction (it owns stdin)
+        # Auto-switch check every 5 cycles (before wait, so user is engaged)
+        if self._cycle % 5 == 0:
+            self._in_wait_phase = True  # pause stdin_listener during interactive prompt
+            self._check_auto_switch()
+            self._in_wait_phase = False
+
         self._in_wait_phase = True
         result = self._dashboard.wait_for_user_input(wait_seconds)
         self._in_wait_phase = False
 
-        if result["source"] in ("prompt_append", "prompt_change", "questionnaire"):
-            # Synchronous: timer stopped, user interacts, then cycle resumes
-            interaction_context = {
-                "active_prompt": active_prompt,
-                "tickers": effective_tickers,
-                "pnl_pct": pnl_pct if cycle_rows else 0.0,
-                "mode": mode if cycle_rows else "normal",
-                "recent_actions": "  ".join(
-                    f"{r['ticker']}:{r['action'].upper()}" for r in cycle_rows[-3:]
-                ),
-            }
+        interaction_context = {
+            "active_prompt": active_prompt,
+            "tickers": effective_tickers,
+            "pnl_pct": pnl_pct if cycle_rows else 0.0,
+            "mode": mode if cycle_rows else "normal",
+            "recent_actions": "  ".join(
+                f"{r['ticker']}:{r['action'].upper()}" for r in cycle_rows[-3:]
+            ),
+        }
+
+        if result["source"] in ("prompt_append", "prompt_change", "questionnaire", "strategy_select"):
             self._in_wait_phase = True
             self._interaction_running = True
             self._run_interaction(result["source"], interaction_context)

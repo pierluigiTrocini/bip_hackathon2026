@@ -36,16 +36,24 @@ def check(label: str, fn) -> bool:
 # ── Alpaca credentials ─────────────────────────────────────────────────────────
 
 def _alpaca_key() -> str:
-    key = os.getenv("APCA-API-KEY-ID") or os.getenv("APCA_API_KEY_ID")
+    key = (
+        os.getenv("ALPACA_API_KEY")
+        or os.getenv("APCA-API-KEY-ID")
+        or os.getenv("APCA_API_KEY_ID")
+    )
     if not key:
-        raise EnvironmentError("APCA-API-KEY-ID not set in .env")
+        raise EnvironmentError("ALPACA_API_KEY not set in .env")
     return key
 
 
 def _alpaca_secret() -> str:
-    secret = os.getenv("APCA-API-SECRET-KEY") or os.getenv("APCA_API_SECRET_KEY")
+    secret = (
+        os.getenv("ALPACA_SECRET_KEY")
+        or os.getenv("APCA-API-SECRET-KEY")
+        or os.getenv("APCA_API_SECRET_KEY")
+    )
     if not secret:
-        raise EnvironmentError("APCA-API-SECRET-KEY not set in .env")
+        raise EnvironmentError("ALPACA_SECRET_KEY not set in .env")
     return secret
 
 

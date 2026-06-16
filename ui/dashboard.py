@@ -41,10 +41,15 @@ class Dashboard:
         self._t_behavior: int = 0
         self._api_lag_ms: float = 0.0
         self._interaction_in_progress: bool = False
+        self._current_strategy: str = "contrarian"
 
     def set_interaction_in_progress(self, value: bool) -> None:
         with self._lock:
             self._interaction_in_progress = value
+
+    def set_current_strategy(self, strategy_id: str) -> None:
+        with self._lock:
+            self._current_strategy = strategy_id
 
     def log(self, msg: str, level: str = "info") -> None:
         color = _STEP_COLORS.get(level, "white")
@@ -71,13 +76,13 @@ class Dashboard:
             t_behavior = self._t_behavior
             cycle = self._cycle
             session_id = self._session_id
+            strategy = self._current_strategy
 
         pnl_pct = portfolio.get("pnl_pct", 0.0)
         mode_str = "[red]CONSERVATIVE[/red]" if pnl_pct < -0.05 else "[green]NORMAL[/green]"
         pnl_color = "green" if pnl_pct >= 0 else "red"
         pnl_arrow = "↑" if pnl_pct >= 0 else "↓"
 
-        # Portfolio section
         portfolio_table = Table(show_header=False, box=None, padding=(0, 1))
         portfolio_table.add_row("Cash:", f"${portfolio.get('cash', 0):,.2f}")
         portfolio_table.add_row("Valore:", f"${portfolio.get('portfolio_value', 0):,.2f}")
@@ -86,25 +91,21 @@ class Dashboard:
             f"[{pnl_color}]{pnl_pct:+.2%} {pnl_arrow} [{mode_str}][/{pnl_color}]",
         )
 
-        # Timeout section
         timeout_table = Table(show_header=False, box=None, padding=(0, 1))
         timeout_table.add_row("T_wait:", f"{t_wait}s")
         timeout_table.add_row("T_behavior:", f"{t_behavior}s")
 
-        # Proposals section
         proposal_lines: list[str] = []
         for sym, entry in proposals.items():
             action = entry.get("action", "?").upper()
             conf = entry.get("conf", 0.0)
-            reasoning = entry.get("reasoning", "")[:60]
-            sentiment = entry.get("sentiment", 0.0)
+            reasoning = entry.get("reasoning", "")[:70]
             color = {"BUY": "green", "SELL": "red", "HOLD": "yellow"}.get(action, "white")
             proposal_lines.append(
-                f"[{color}]{sym} → {action}[/{color}] (conf: {conf:.2f}, {reasoning})"
+                f"[{color}]{sym} → {action}[/{color}] (conf: {conf:.2f}) {reasoning}"
             )
         proposals_text = "\n".join(proposal_lines) if proposal_lines else "Waiting for first cycle…"
 
-        # Journal tail
         journal_lines: list[str] = []
         for e in journal_tail[-5:]:
             ts = e.get("ts", "")[-8:-3] if e.get("ts") else "--:--"
@@ -121,20 +122,22 @@ class Dashboard:
             )
         journal_text = "\n".join(journal_lines) if journal_lines else "No entries yet."
 
-        # Countdown bar
         bar = "█" * (countdown * 20 // max(t_wait, 1)) + "░" * (20 - countdown * 20 // max(t_wait, 1))
         countdown_line = (
             f"⏳ {countdown}s [{bar}] │ "
             "[bold]INVIO[/bold] conferma · "
-            "[bold cyan]a[/bold cyan] aggiungi istruzione · "
-            "[bold cyan]p[/bold cyan] cambia prompt · "
+            "[bold cyan]a[/bold cyan] istruzione · "
+            "[bold cyan]p[/bold cyan] prompt · "
             "[bold cyan]q[/bold cyan] questionario · "
-            "[bold yellow]m[/bold yellow] override ordine"
+            "[bold cyan]s[/bold cyan] strategia · "
+            "[bold yellow]m[/bold yellow] override"
         )
 
         header = (
             f"[bold]BIP Trading Agent[/bold]  │  "
-            f"Sessione: {str(session_id)[:8]}…  │  Ciclo: {cycle}  │  {_now_ts()}"
+            f"Sessione: {str(session_id)[:8]}…  │  "
+            f"Ciclo: {cycle}  │  "
+            f"Strategia: [bold cyan]{strategy}[/bold cyan]  │  {_now_ts()}"
         )
 
         body = (
@@ -148,7 +151,6 @@ class Dashboard:
         return Panel(body, title=header, border_style="blue")
 
     def wait_for_user_input(self, timeout_seconds: int) -> dict:
-        # If a background interaction (p/q) is running, skip stdin to avoid concurrent reads
         with self._lock:
             _ip = self._interaction_in_progress
         if _ip:
@@ -196,6 +198,8 @@ class Dashboard:
             return {"source": "prompt_change", "data": {}}
         if user_input == "q":
             return {"source": "questionnaire", "data": {}}
+        if user_input == "s":
+            return {"source": "strategy_select", "data": {}}
         if user_input == "m":
             _console.print("[bold yellow]Override manuale[/bold yellow] — inserisci: TICKER SIDE QTY (es: AAPL buy 5) [dim](30s)[/dim]")
             _override_buf: list[str] = []
@@ -218,12 +222,43 @@ class Dashboard:
         return {"source": "confirmed", "data": {}}
 
     def interactive_input(self, prompt_text: str) -> str:
-        """Styled prompt for interactive input during background interaction."""
         _console.print(prompt_text)
         try:
             return input("> ").strip()
         except (EOFError, KeyboardInterrupt):
             return ""
+
+    def ask_strategy_switch(self, new_id: str, new_name: str, reason: str, timeout_seconds: int = 15) -> bool:
+        """Show an auto-switch recommendation and ask for confirmation. Returns True if accepted."""
+        _console.print(
+            Panel(
+                f"[bold yellow]L'agente suggerisce di cambiare strategia:[/bold yellow]\n\n"
+                f"[dim]{reason}[/dim]\n\n"
+                f"Nuova strategia: [bold cyan]{new_name}[/bold cyan]\n\n"
+                f"[bold]s[/bold] accetta  ·  [bold]n[/bold] rifiuta  ·  "
+                f"timeout {timeout_seconds}s → auto-accetta",
+                title="[bold yellow]◆ CAMBIO STRATEGIA AUTOMATICO[/bold yellow]",
+                border_style="yellow",
+            )
+        )
+
+        _result: list[str] = []
+        def _get_answer():
+            try:
+                _result.append(input("> ").strip().lower())
+            except (EOFError, KeyboardInterrupt):
+                pass
+
+        t = threading.Thread(target=_get_answer, daemon=True)
+        t.start()
+        t.join(timeout=timeout_seconds)
+
+        answer = _result[0] if _result else ""
+        if answer == "n":
+            _console.print("[dim]Cambio rifiutato — strategia invariata.[/dim]")
+            return False
+        _console.print(f"[green]✓ Strategia aggiornata a: {new_name}[/green]")
+        return True
 
     def print_discovery_candidates(self, candidates: list[dict]) -> None:
         table = Table(
@@ -286,7 +321,6 @@ class Dashboard:
         )
 
     def print_portfolio_positions(self, positions: dict) -> None:
-        """Display currently held positions fetched from Alpaca."""
         if not positions:
             _console.print(
                 Panel(
@@ -334,14 +368,6 @@ class Dashboard:
         )
 
     def confirm_or_reprompt(self, candidates: list[dict], timeout_seconds: int = 30) -> dict:
-        """
-        Show the proposed ticker list and ask the user to confirm or provide a new prompt.
-        Auto-confirms with default tickers if the timeout expires.
-
-        Returns:
-          {"action": "confirm", "tickers": [...]}
-          {"action": "reprompt", "new_prompt": "..."}
-        """
         default = [c["ticker"] for c in candidates if c.get("valid", True)]
         default_str = ", ".join(default)
 
@@ -397,9 +423,7 @@ class Dashboard:
             _console.print(f"[green]✓ Confermati:[/green] {default_str}")
             return {"action": "confirm", "tickers": default}
 
-        _console.print(
-            f"[yellow]Nuovo prompt ricevuto — riavvio discovery:[/yellow] {raw}"
-        )
+        _console.print(f"[yellow]Nuovo prompt ricevuto — riavvio discovery:[/yellow] {raw}")
         return {"action": "reprompt", "new_prompt": raw}
 
     def print_cycle_summary(
@@ -412,25 +436,30 @@ class Dashboard:
         mode: str,
         wait_seconds: int,
         veto: bool,
+        strategy_name: str = "",
     ) -> None:
         table = Table(
             show_header=True,
             header_style="bold cyan",
             box=None,
-            padding=(0, 2),
+            padding=(0, 1),
         )
         table.add_column("Ticker", style="bold", min_width=6)
         table.add_column("Prezzo", justify="right", min_width=10)
-        table.add_column("Trend", min_width=6)
+        table.add_column("Trend", min_width=5)
         table.add_column("Sentiment", min_width=16)
-        table.add_column("Decisione", min_width=16)
+        table.add_column("Decisione", min_width=14)
         table.add_column("Conf", justify="right", min_width=5)
+        table.add_column("P&L pos.", justify="right", min_width=9)
         table.add_column("Ordine", min_width=8)
-        table.add_column("Ragionamento (sintesi)", min_width=40, no_wrap=True)
+        table.add_column("Perché", min_width=45, no_wrap=False)
 
         action_color = {"buy": "green", "sell": "red", "hold": "yellow"}
         trend_symbol = {"up": "↑", "down": "↓", "flat": "→"}
-        sentiment_color = {"positive": "green", "negative": "red", "neutral": "white", "very_negative": "red", "very_positive": "green"}
+        sentiment_color = {
+            "positive": "green", "negative": "red",
+            "neutral": "white", "very_negative": "red", "very_positive": "green",
+        }
 
         for r in rows:
             act = r["action"]
@@ -442,9 +471,18 @@ class Dashboard:
             sent_score = r["sentiment_score"]
             sent_col = sentiment_color.get(sent_label, "white")
             order_str = "✓ inviato" if r.get("order_id") else "—"
-            reasoning_short = (r["reasoning"] or "")[:55]
-            if len(r["reasoning"] or "") > 55:
-                reasoning_short += "…"
+
+            # Unrealized P&L display
+            upnl = r.get("unrealized_pnl_pct")
+            if upnl is not None:
+                upnl_col = "green" if upnl >= 0.02 else "red" if upnl <= -0.03 else "white"
+                upnl_str = f"[{upnl_col}]{upnl:+.1%}[/{upnl_col}]"
+            else:
+                upnl_str = "[dim]—[/dim]"
+
+            # Reasoning — show up to 80 chars in table
+            reasoning_text = (r["reasoning"] or "")
+            reasoning_short = reasoning_text[:78] + ("…" if len(reasoning_text) > 78 else "")
 
             table.add_row(
                 r["ticker"],
@@ -453,19 +491,21 @@ class Dashboard:
                 f"[{sent_col}]{sent_label} ({sent_score:+.2f})[/{sent_col}]",
                 f"[{act_col}]{act.upper()}[/{act_col}]",
                 f"{r['conf']:.2f}",
+                upnl_str,
                 order_str,
                 reasoning_short,
             )
 
         pnl_col = "green" if pnl_pct >= 0 else "red"
-        mode_str = f"[red]CONSERVATIVE[/red]" if mode == "conservative" else "[green]NORMAL[/green]"
+        mode_str = "[red]CONSERVATIVE[/red]" if mode == "conservative" else "[green]NORMAL[/green]"
         veto_str = "  [red][NEWS VETO][/red]" if veto else ""
+        strat_str = f"  Strategia: [bold cyan]{strategy_name}[/bold cyan]" if strategy_name else ""
         footer = (
             f"Portfolio: [bold]${portfolio_value:,.2f}[/bold]  "
             f"Cash: ${cash:,.2f}  "
             f"P&L: [{pnl_col}]{pnl_pct:+.2%}[/{pnl_col}]  "
-            f"Modalità: {mode_str}{veto_str}\n"
-            f"[dim]Prossimo ciclo tra {wait_seconds}s — INVIO conferma · [m] override · [p] prompt · [q] questionario[/dim]"
+            f"Modalità: {mode_str}{strat_str}{veto_str}\n"
+            f"[dim]Prossimo ciclo tra {wait_seconds}s — INVIO · [a] istruzione · [p] prompt · [q] questionario · [s] strategia · [m] override[/dim]"
         )
 
         _console.print(

@@ -5,6 +5,8 @@ import ollama
 
 from src.agent import config
 from src.agent import journal as journal_module
+from src.agent import strategy_library
+
 
 _DECISION_SCHEMA = {
     "type": "object",
@@ -16,19 +18,6 @@ _DECISION_SCHEMA = {
     },
     "required": ["action", "confidence", "reasoning", "accuracy_review"],
 }
-
-_SYSTEM_PROMPT = (
-    "You are a contrarian quantitative trading analyst. "
-    "Your core strategy is CONTRARIAN: buy when the market is fearful and selling, sell when the market is greedy and buying. "
-    "Negative sentiment means fear/panic → the contrarian action is BUY. "
-    "Positive sentiment means greed/euphoria → the contrarian action is SELL. "
-    "The CONTRARIAN SIGNAL in the prompt is your primary decision driver — follow it unless data is stale or confidence is too low. "
-    "You NEVER invent, estimate, or recall prices from memory — you only use the data provided in this prompt. "
-    "You NEVER fabricate news or sentiment scores. "
-    "When data is stale, uncertain, or confidence is low, you hold — not buy or sell. "
-    "Your reasoning must cite the contrarian signal and the specific sentiment score. "
-    "Output only valid JSON matching the schema. Max 2 sentences for reasoning, 1 for accuracy_review."
-)
 
 
 class Reasoner:
@@ -63,27 +52,36 @@ class Reasoner:
         stale: bool,
         staleness_seconds: int,
         t_behavior: int,
+        strategy_id: str = "contrarian",
+        take_profit_hint: str = "",
     ) -> dict:
         positions_str = ", ".join(
             f"{sym}: {p['qty']} shares @ ${p['avg_entry_price']:.2f}"
             for sym, p in positions.items()
         ) or "none"
 
-        # Contrarian signal: derived from sentiment + trend (opposite of consensus)
+        # Factual market signal — interpreted differently by each strategy
         if sentiment_score <= -0.4 and trend == "down":
-            contrarian_signal = "STRONG BUY — extreme fear + downtrend: classic contrarian entry"
+            market_signal = "EXTREME FEAR — sentiment very negative + downtrend active"
         elif sentiment_score <= -0.2:
-            contrarian_signal = "BUY — market fear/selling: contrarian opportunity"
+            market_signal = "FEAR — market selling, negative sentiment"
         elif sentiment_score >= 0.4 and trend == "up":
-            contrarian_signal = "STRONG SELL — extreme greed + uptrend: classic contrarian exit"
+            market_signal = "EXTREME GREED — sentiment very positive + uptrend active"
         elif sentiment_score >= 0.2:
-            contrarian_signal = "SELL — market greed/buying: contrarian distribution"
+            market_signal = "GREED — market buying, positive sentiment"
         else:
-            contrarian_signal = "HOLD — neutral sentiment, no clear contrarian edge"
+            market_signal = "NEUTRAL — no extreme sentiment signal"
+
+        take_profit_section = (
+            f"=== POSITION P&L ===\n{take_profit_hint}\n\n"
+            if take_profit_hint else ""
+        )
+
+        system_prompt = strategy_library.get(strategy_id)["system_prompt"]
 
         user_prompt = (
-            f"{_SYSTEM_PROMPT}\n\n"
-            f"=== CONTRARIAN SIGNAL ===\n{contrarian_signal}\n\n"
+            f"=== MARKET SIGNAL ===\n{market_signal}\n\n"
+            f"{take_profit_section}"
             f"=== AGENT BEHAVIOUR ===\n{active_prompt}\n\n"
             f"{imitative_hints}\n\n"
             f"=== MARKET DATA ({ticker}) ===\n"
@@ -95,18 +93,19 @@ class Reasoner:
             f"Cash: ${cash:,.2f} | Mode: {mode}\n"
             f"Positions: {positions_str}\n\n"
             f"=== MEMORY ===\n{memory_context}\n\n"
-            f"Decide: buy, sell, or hold {ticker}. Follow the CONTRARIAN SIGNAL above. Return valid JSON only."
+            f"Decide: buy, sell, or hold {ticker}. Return valid JSON only."
         )
 
         def _call() -> dict:
             resp = ollama.generate(
                 model=config.OLLAMA_REASONING_MODEL,
+                system=system_prompt,
                 prompt=user_prompt,
                 format=_DECISION_SCHEMA,
                 options={"temperature": 0.2, "num_predict": 300},
                 keep_alive="30s",
             )
-            raw = resp.get("response", "{}")
+            raw = resp.response
             parsed = json.loads(raw)
             action = parsed.get("action", "hold")
             if action not in ("buy", "sell", "hold"):
@@ -137,7 +136,7 @@ class Reasoner:
             )
             return self._safe_hold(str(exc))
 
-        # Apply stale penalty in code — model cannot bypass this
+        # Stale penalty applied in code — model cannot bypass this
         penalty = min(staleness_seconds / 60 * 0.05, 0.40)
         confidence = max(0.0, result["confidence_raw"] - penalty)
 
