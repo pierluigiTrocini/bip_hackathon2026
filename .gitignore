@@ -1,2 +1,9 @@
 .env
 hackathon.md
+__pycache__/
+*.pyc
+.venv/
+data/journal.jsonl
+data/error_log.jsonl
+data/session.json
+agent.log

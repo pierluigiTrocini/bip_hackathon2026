@@ -1,0 +1,74 @@
+{
+  "strategies": [
+    {
+      "id": "buffett_value",
+      "name": "Warren Buffett — Value Investing",
+      "keywords": ["undervalued", "long-term", "fundamentals", "dividend", "moat"],
+      "anti_keywords": ["speculation", "short", "crypto", "leverage"],
+      "rules": [
+        "Buy only when price is significantly below intrinsic value",
+        "Hold for the long term — ignore short-term volatility",
+        "Prefer companies with durable competitive advantages",
+        "Avoid businesses you do not understand"
+      ],
+      "risk_profile": "conservative",
+      "sectors": ["consumer", "finance", "technology"]
+    },
+    {
+      "id": "lynch_growth",
+      "name": "Peter Lynch — Growth at Reasonable Price",
+      "keywords": ["growth", "earnings", "PEG", "consumer", "retail"],
+      "anti_keywords": ["macro", "bonds", "commodities"],
+      "rules": [
+        "Invest in what you know and understand",
+        "Look for companies with PEG ratio below 1",
+        "Small-cap growth companies can outperform",
+        "Sell when the story changes, not when price drops"
+      ],
+      "risk_profile": "moderate",
+      "sectors": ["consumer", "technology", "healthcare"]
+    },
+    {
+      "id": "simons_quant",
+      "name": "Jim Simons — Quantitative Signals",
+      "keywords": ["momentum", "trend", "signal", "data", "pattern"],
+      "anti_keywords": ["narrative", "opinion", "macro"],
+      "rules": [
+        "Follow statistical patterns, not narratives",
+        "Mean reversion is a valid signal when momentum is absent",
+        "Volume confirms price action",
+        "Cut losses quickly — do not average down"
+      ],
+      "risk_profile": "moderate",
+      "sectors": ["any"]
+    },
+    {
+      "id": "green_esg",
+      "name": "ESG — Green Investing",
+      "keywords": ["green", "esg", "sustainable", "renewable", "climate", "environment"],
+      "anti_keywords": ["fossil", "arms", "weapons", "tobacco", "gambling"],
+      "rules": [
+        "Prioritise companies with strong ESG scores",
+        "Avoid sectors with high carbon footprint",
+        "Renewable energy and clean tech are preferred",
+        "Social impact is as important as financial return"
+      ],
+      "risk_profile": "moderate",
+      "sectors": ["energy", "technology", "utilities"]
+    },
+    {
+      "id": "defense_sector",
+      "name": "Defense — Sector Investing",
+      "keywords": ["defense", "arms", "military", "aerospace", "government contract"],
+      "anti_keywords": ["green", "esg", "consumer", "retail"],
+      "rules": [
+        "Government contracts provide revenue visibility",
+        "Geopolitical tension increases sector demand",
+        "Prefer primes over sub-contractors for stability",
+        "Dividend yield is a key selection criterion"
+      ],
+      "risk_profile": "conservative",
+      "sectors": ["defense", "aerospace", "technology"]
+    }
+  ]
+}
