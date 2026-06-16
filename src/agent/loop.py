@@ -1,4 +1,5 @@
 import concurrent.futures
+import re
 import select
 import sys
 import threading
@@ -7,15 +8,31 @@ from datetime import datetime, timezone
 
 from src.agent import config
 from src.agent import journal as journal_module
+from src.agent import news_log
 from src.agent import strategy_library
 from src.agent.adaptive_timeout import AdaptiveTimeout
 from src.agent.behavior import BehaviorManager
 from src.agent.broker import Broker
+from src.agent.correlation_engine import CorrelationEngine
 from src.agent.imitative_layer import ImiativeLayer
 from src.agent.memory_manager import MemoryManager
 from src.agent.reasoner import Reasoner
 from src.agent.session import SessionManager
 from src.agent.tool_executor import ToolExecutor
+
+
+_TICKER_PATTERN = re.compile(r'\b([A-Z]{2,5})\b')
+_KNOWN_NON_TICKERS = {
+    "US", "CEO", "CFO", "GDP", "IPO", "SEC", "ETF", "AI", "UK", "EU",
+    "NY", "FED", "CPI", "Q1", "Q2", "Q3", "Q4", "EPS", "BUY", "SELL",
+}
+
+
+def _extract_mentioned_tickers(article: dict) -> list[str]:
+    """Extract potential ticker symbols from article title and summary."""
+    text = f"{article.get('title', '')} {article.get('summary', '')}"
+    candidates = _TICKER_PATTERN.findall(text)
+    return list({c for c in candidates if c not in _KNOWN_NON_TICKERS})
 
 
 def _now_utc() -> str:
@@ -35,6 +52,7 @@ class AgentLoop:
         behavior_manager: BehaviorManager,
         session_manager: SessionManager,
         dashboard,
+        correlation_engine: CorrelationEngine | None = None,
         tickers: list[str] | None = None,
     ) -> None:
         self._session = session
@@ -47,6 +65,7 @@ class AgentLoop:
         self._bm = behavior_manager
         self._sm = session_manager
         self._dashboard = dashboard
+        self._correlation_engine = correlation_engine or CorrelationEngine()
         self._running = False
         self._cycle = session.get("cycle", 0)
         self._tickers: list[str] = tickers if tickers else config.TICKERS
@@ -92,6 +111,7 @@ class AgentLoop:
 
     def start(self) -> None:
         self._running = True
+        self._correlation_engine.rebuild()
         threading.Thread(target=self._stdin_listener, daemon=True).start()
         while self._running:
             try:
@@ -385,11 +405,23 @@ class AgentLoop:
 
                 self._dashboard.log(f"  {ticker} → [3] analisi sentiment ({article_count} art.)…", "info")
                 from src.agent import sentiment as sentiment_module
-                sentiment_data = sentiment_module.analyse(ticker, articles, active_prompt, t_behavior)
+                sentiment_data, keywords_and_relevance = sentiment_module.analyse(
+                    ticker, articles, active_prompt, t_behavior
+                )
                 self._dashboard.log(
                     f"  {ticker} → sentiment: {sentiment_data['label']} "
                     f"({sentiment_data['score']:+.2f})",
                     "ok",
+                )
+
+                # Persist articles to news_log (non-blocking; never raises)
+                news_log.write_articles(
+                    articles=articles,
+                    ticker=ticker,
+                    cycle=self._cycle,
+                    session_id=session_id,
+                    sentiment_score=sentiment_data["score"],
+                    keywords_and_relevance=keywords_and_relevance,
                 )
 
                 # 4. PORTFOLIO HEALTH CHECK
@@ -411,6 +443,25 @@ class AgentLoop:
                 memory_context = self._mm.build_context(ticker)
                 imitative_hints = self._il.build_hints(active_prompt, ticker)
                 imitative_source = self._il.get_active_strategy_id(active_prompt)
+
+                # Rebuild correlation matrix every NCCI_REBUILD_EVERY cycles (daemon)
+                if self._cycle % config.NCCI_REBUILD_EVERY == 0:
+                    threading.Thread(
+                        target=self._correlation_engine.rebuild,
+                        daemon=True,
+                    ).start()
+
+                # Register dynamically mentioned tickers from news
+                for article in articles:
+                    for mentioned in _extract_mentioned_tickers(article):
+                        self._correlation_engine.register_dynamic_ticker(mentioned)
+
+                # Build correlation section for prompt
+                correlation_section = self._correlation_engine.build_prompt_section(
+                    tickers=effective_tickers,
+                    positions=positions,
+                    threshold=config.NCCI_THRESHOLD_DISPLAY,
+                )
 
                 price = price_result.data.get("price", 0.0) if price_result.ok else 0.0
                 price_timestamp = price_result.data.get("timestamp", _now_utc()) if price_result.ok else _now_utc()
@@ -488,6 +539,7 @@ class AgentLoop:
                     t_behavior=t_behavior,
                     strategy_id=self._current_strategy,
                     take_profit_hint=take_profit_hint,
+                    correlation_section=correlation_section,
                 )
 
                 stale_tag = f"  -stale:{decision['stale_penalty']:.2f}" if decision["stale_penalty"] > 0 else ""
@@ -569,6 +621,27 @@ class AgentLoop:
                         f"  {ticker} → HOLD autonomo ({'; '.join(reasons)})", "warn"
                     )
 
+                # 7b. MARK NEWS DECISION + PRINT DECISION PANEL
+                news_log.mark_decision(
+                    ticker=ticker,
+                    cycle=self._cycle,
+                    session_id=session_id,
+                    decision=action,
+                )
+                display_articles = news_log.read_for_display(
+                    ticker=ticker,
+                    cycle=self._cycle,
+                    session_id=session_id,
+                    max_articles=config.NEWS_DISPLAY_MAX_ARTICLES,
+                )
+                self._dashboard.print_decision_news(
+                    ticker=ticker,
+                    action=action,
+                    confidence=decision["confidence"],
+                    caption=decision.get("caption", ""),
+                    articles=display_articles,
+                )
+
                 # 8. RECORD
                 entry = journal_module.build_entry(
                     ts=_now_utc(),
@@ -636,6 +709,12 @@ class AgentLoop:
                     self._dashboard.log(
                         f"  {ticker} → NEWS VETO attivato (sentiment {sentiment_data['score']:.2f})",
                         "err",
+                    )
+                    news_log.mark_decision(
+                        ticker=ticker,
+                        cycle=self._cycle,
+                        session_id=session_id,
+                        decision="veto",
                     )
 
             except Exception as exc:

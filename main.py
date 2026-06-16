@@ -31,6 +31,7 @@ def main():
     from src.agent.session import SessionManager
     from src.agent.behavior import BehaviorManager
     from src.agent.discovery import DiscoveryAgent
+    from src.agent.correlation_engine import CorrelationEngine
     from src.agent.loop import AgentLoop
     from ui.dashboard import Dashboard
 
@@ -80,13 +81,14 @@ def main():
 
     # Step 3: Initialise modules
     dashboard.log("Inizializzazione moduli…", "info")
-    tool_executor    = ToolExecutor(adaptive_timeout)
-    memory_manager   = MemoryManager()
-    imitative_layer  = ImiativeLayer()
-    reasoner         = Reasoner()
-    broker           = Broker()
-    behavior_manager = BehaviorManager(session, adaptive_timeout)
-    discovery_agent  = DiscoveryAgent()
+    tool_executor       = ToolExecutor(adaptive_timeout)
+    memory_manager      = MemoryManager()
+    imitative_layer     = ImiativeLayer()
+    reasoner            = Reasoner()
+    broker              = Broker()
+    behavior_manager    = BehaviorManager(session, adaptive_timeout)
+    discovery_agent     = DiscoveryAgent()
+    correlation_engine  = CorrelationEngine()
     discovery_agent._session_id = session.get("session_id", "")
     dashboard.log(
         f"Modelli: {config.OLLAMA_REASONING_MODEL} + {config.OLLAMA_SENTIMENT_MODEL}",
@@ -161,6 +163,7 @@ def main():
         behavior_manager=behavior_manager,
         session_manager=session_mgr,
         dashboard=dashboard,
+        correlation_engine=correlation_engine,
         tickers=confirmed_tickers,
     )
 

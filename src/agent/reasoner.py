@@ -15,8 +15,9 @@ _DECISION_SCHEMA = {
         "confidence":      {"type": "number"},
         "reasoning":       {"type": "string"},
         "accuracy_review": {"type": "string"},
+        "caption":         {"type": "string"},
     },
-    "required": ["action", "confidence", "reasoning", "accuracy_review"],
+    "required": ["action", "confidence", "reasoning", "accuracy_review", "caption"],
 }
 
 # Per-strategy signal mapping: (sentiment_score, trend) → action recommendation
@@ -108,12 +109,13 @@ class Reasoner:
 
     def _safe_hold(self, reason: str) -> dict:
         return {
-            "action": "hold",
-            "confidence": 0.0,
-            "confidence_raw": 0.0,
-            "stale_penalty": 0.0,
-            "reasoning": f"Hold forced: {reason}",
+            "action":          "hold",
+            "confidence":      0.0,
+            "confidence_raw":  0.0,
+            "stale_penalty":   0.0,
+            "reasoning":       f"Hold forced: {reason}",
             "accuracy_review": "N/A",
+            "caption":         f"Decisione forzata: {reason[:120]}",
         }
 
     def decide(
@@ -136,6 +138,7 @@ class Reasoner:
         t_behavior: int,
         strategy_id: str = "contrarian",
         take_profit_hint: str = "",
+        correlation_section: str = "",
     ) -> dict:
         positions_str = ", ".join(
             f"{sym}: {p['qty']} shares @ ${p['avg_entry_price']:.2f}"
@@ -149,6 +152,8 @@ class Reasoner:
             f"=== POSITION P&L ===\n{take_profit_hint}\n\n"
             if take_profit_hint else ""
         )
+
+        correlation_block = f"\n{correlation_section}\n\n" if correlation_section else ""
 
         user_prompt = (
             f"=== STRATEGY: {strategy['name'].upper()} ===\n"
@@ -166,9 +171,14 @@ class Reasoner:
             f"=== PORTFOLIO ===\n"
             f"Cash: ${cash:,.2f} | Mode: {mode}\n"
             f"Positions: {positions_str}\n\n"
-            f"=== MEMORY ===\n{memory_context}\n\n"
+            f"=== MEMORY ===\n{memory_context}\n"
+            f"{correlation_block}"
             f"YOUR ACTION SIGNAL IS: {action_signal}\n"
-            f"Follow the ACTION SIGNAL above. If you deviate, explain why in reasoning. "
+            f"Follow the ACTION SIGNAL above. If you deviate, explain why in reasoning.\n"
+            f"The 'caption' field must be a single sentence in Italian (max 160 characters) "
+            f"explaining the decision to a non-expert user. Reference at least one concrete data point "
+            f"(price vs MA, sentiment score, or a specific news topic). "
+            f"Do NOT start with the action word (e.g. do not start with 'Ho deciso di comprare').\n"
             f"Return valid JSON only."
         )
 
@@ -204,10 +214,11 @@ class Reasoner:
             confidence_raw = float(parsed.get("confidence", 0.0))
             confidence_raw = max(0.0, min(1.0, confidence_raw))
             return {
-                "action": action,
-                "confidence_raw": confidence_raw,
-                "reasoning": str(parsed.get("reasoning", ""))[:400],
+                "action":          action,
+                "confidence_raw":  confidence_raw,
+                "reasoning":       str(parsed.get("reasoning", ""))[:400],
                 "accuracy_review": str(parsed.get("accuracy_review", ""))[:200],
+                "caption":         str(parsed.get("caption", ""))[:160],
             }
 
         try:
@@ -232,10 +243,11 @@ class Reasoner:
         confidence = max(0.0, result["confidence_raw"] - penalty)
 
         return {
-            "action": result["action"],
-            "confidence": round(confidence, 4),
-            "confidence_raw": round(result["confidence_raw"], 4),
-            "stale_penalty": round(penalty, 4),
-            "reasoning": result["reasoning"],
+            "action":          result["action"],
+            "confidence":      round(confidence, 4),
+            "confidence_raw":  round(result["confidence_raw"], 4),
+            "stale_penalty":   round(penalty, 4),
+            "reasoning":       result["reasoning"],
             "accuracy_review": result["accuracy_review"],
+            "caption":         result.get("caption", ""),
         }

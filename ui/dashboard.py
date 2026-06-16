@@ -518,6 +518,66 @@ class Dashboard:
             )
         )
 
+    def print_decision_news(
+        self,
+        ticker: str,
+        action: str,
+        confidence: float,
+        caption: str,
+        articles: list[dict],
+    ) -> None:
+        """
+        Print a Rich Panel immediately after a decision, outside the Live context.
+        Uses Console.print() directly — never wraps inside Live.
+        """
+        action_upper = action.upper()
+        border_colors = {
+            "buy":  "green",
+            "sell": "red",
+            "hold": "yellow",
+            "veto": "magenta",
+        }
+        border = border_colors.get(action.lower(), "blue")
+        title = f"{ticker} — {action_upper}  (conf: {confidence:.2f})"
+
+        lines: list[str] = []
+
+        if caption:
+            from rich.text import Text as RichText
+            wrapped = caption[:160]
+            lines.append(f"[bold white]💬 {wrapped}[/bold white]")
+        else:
+            lines.append("[dim]Nessuna spiegazione disponibile.[/dim]")
+
+        if articles:
+            lines.append("")
+            lines.append("[bold dim]Notizie a supporto:[/bold dim]")
+            for i, art in enumerate(articles):
+                if i > 0:
+                    lines.append("")
+                source = str(art.get("source", ""))
+                title_art = str(art.get("title", ""))
+                url = str(art.get("url", ""))
+
+                src_padded = source[:12].ljust(12)
+                title_truncated = title_art[:70] + ("…" if len(title_art) > 70 else "")
+                lines.append(f"[bold cyan]{src_padded}[/bold cyan]  ·  {title_truncated}")
+                if url:
+                    lines.append(f"{'':14}{url}")
+        else:
+            lines.append("")
+            lines.append("[dim]Nessuna notizia disponibile per questo ciclo.[/dim]")
+
+        body = "\n".join(lines)
+        _console.print(
+            Panel(
+                body,
+                title=f"[bold]{title}[/bold]",
+                border_style=border,
+                padding=(1, 2),
+            )
+        )
+
     def print_resoconto(self, summary: dict) -> None:
         table = Table(show_header=False, box=None, padding=(0, 1))
         pnl = summary.get("final_pnl_pct")

@@ -42,3 +42,15 @@ JOURNAL_PATH: str = os.getenv("JOURNAL_PATH", "data/journal.jsonl")
 ERROR_LOG_PATH: str = os.getenv("ERROR_LOG_PATH", "data/error_log.jsonl")
 SESSION_PATH: str = os.getenv("SESSION_PATH", "data/session.json")
 IMITATIVE_DATASET_PATH: str = os.getenv("IMITATIVE_DATASET_PATH", "data/strategies/imitative_dataset.json")
+
+# News log
+NEWS_LOG_PATH:             str = os.getenv("NEWS_LOG_PATH", "data/news_log.jsonl")
+NEWS_LOG_COMPACT_EVERY:    int = int(os.getenv("NEWS_LOG_COMPACT_EVERY", "100"))
+NEWS_LOG_MAX_PER_TICKER:   int = int(os.getenv("NEWS_LOG_MAX_PER_TICKER", "50"))
+NEWS_DISPLAY_MAX_ARTICLES: int = int(os.getenv("NEWS_DISPLAY_MAX_ARTICLES", "3"))
+
+# Correlation Engine (NCCI)
+NCCI_REBUILD_EVERY:       int   = int(os.getenv("NCCI_REBUILD_EVERY", "10"))
+NCCI_THRESHOLD_DISPLAY:   float = float(os.getenv("NCCI_THRESHOLD_DISPLAY", "0.20"))
+NCCI_KEYWORD_MIN_WEIGHT:  float = float(os.getenv("NCCI_KEYWORD_MIN_WEIGHT", "0.15"))
+NCCI_HALF_LIFE_DAYS:      float = float(os.getenv("NCCI_HALF_LIFE_DAYS", "7.0"))

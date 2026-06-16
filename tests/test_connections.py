@@ -117,7 +117,7 @@ def test_ollama_reasoning_model_loaded():
 def test_ollama_sentiment_returns_valid_json():
     from src.agent.sentiment import analyse
     articles = [{"title": "Apple reports record earnings", "summary": "AAPL beats estimates."}]
-    result = analyse("AAPL", articles, active_prompt="growth investing", t_behavior=120)
+    result, kw = analyse("AAPL", articles, active_prompt="growth investing", t_behavior=120)
     assert -1.0 <= result["score"] <= 1.0
     assert result["label"] in ("positive", "negative", "neutral")
 
@@ -136,6 +136,92 @@ def test_ollama_reasoning_returns_valid_decision():
     )
     assert decision["action"] in ("buy", "sell", "hold")
     assert 0.0 <= decision["confidence"] <= 1.0
+
+
+# ── News Log ──────────────────────────────────────────────────────────────────
+
+@test("news_log write/read roundtrip")
+def test_news_log_write_read():
+    import src.agent.news_log as nl
+    with tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False) as f:
+        path = f.name
+    original_path = nl.NEWS_LOG_PATH
+    nl.NEWS_LOG_PATH = path
+    try:
+        articles = [{"title": "AAPL beats earnings", "summary": "Record Q4.", "source": "Bloomberg", "url": ""}]
+        kw = [{"keywords": ["earnings", "tech"], "relevance_score": 0.8}]
+        nl.write_articles(articles, "AAPL", cycle=1, session_id="s1",
+                          sentiment_score=0.5, keywords_and_relevance=kw)
+        result = nl.get_recent_for_ticker("AAPL", n=5, session_id="s1")
+        assert len(result) >= 1
+        assert result[-1]["ticker"] == "AAPL"
+    finally:
+        nl.NEWS_LOG_PATH = original_path
+        os.unlink(path)
+
+
+@test("keyword extraction returns one dict per article")
+def test_keyword_extraction_returns_list():
+    from src.agent.news_log import extract_keywords_and_relevance
+    articles = [
+        {"title": "Apple earnings beat", "summary": "AAPL Q4 record."},
+        {"title": "Fed raises rates", "summary": "Inflation update."},
+    ]
+    result = extract_keywords_and_relevance(articles, "AAPL", t_behavior=120)
+    assert len(result) == 2
+    assert all("keywords" in r for r in result)
+    assert all("relevance_score" in r for r in result)
+
+
+@test("CorrelationEngine rebuild on empty news_log completes without raising")
+def test_correlation_engine_rebuild_empty_log():
+    from src.agent.correlation_engine import CorrelationEngine
+    import src.agent.news_log as nl
+    with tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False) as f:
+        path = f.name
+    original_path = nl.NEWS_LOG_PATH
+    nl.NEWS_LOG_PATH = path
+    try:
+        # File exists but is empty
+        open(path, "w").close()
+        ce = CorrelationEngine()
+        ce.rebuild()  # Must not raise
+        assert ce.get_ncci("AAPL", "TSLA") == 0.0
+    finally:
+        nl.NEWS_LOG_PATH = original_path
+        os.unlink(path)
+
+
+@test("Reasoner.decide() returns caption field")
+def test_reasoner_returns_caption_field():
+    from src.agent.reasoner import Reasoner
+    r = Reasoner()
+    decision = r.decide(
+        ticker="AAPL", memory_context="No prior decisions.", price=150.0,
+        price_timestamp="2026-01-01T00:00:00Z", ma5=148.0, trend="up",
+        sentiment_score=0.3, sentiment_label="positive",
+        imitative_hints="", active_prompt="growth investing",
+        cash=90000.0, positions={}, mode="normal",
+        stale=False, staleness_seconds=0, t_behavior=120,
+    )
+    assert "caption" in decision, f"Missing 'caption' in decision: {decision.keys()}"
+    assert isinstance(decision["caption"], str)
+
+
+@test("caption field is always <= 160 chars")
+def test_caption_max_160_chars():
+    from src.agent.reasoner import Reasoner
+    r = Reasoner()
+    decision = r.decide(
+        ticker="TSLA", memory_context="Recent hold.", price=250.0,
+        price_timestamp="2026-01-01T00:00:00Z", ma5=245.0, trend="up",
+        sentiment_score=0.1, sentiment_label="neutral",
+        imitative_hints="", active_prompt="balanced strategy",
+        cash=80000.0, positions={}, mode="normal",
+        stale=False, staleness_seconds=0, t_behavior=120,
+    )
+    assert len(decision.get("caption", "")) <= 160, \
+        f"caption too long: {len(decision['caption'])} chars"
 
 
 # ── Adaptive Timeout ──────────────────────────────────────────────────────────
@@ -295,6 +381,12 @@ def run_all():
         test_tool_executor_graceful_on_invalid_ticker,
         test_imitative_dataset_exists, test_imitative_filter_green_prompt,
         test_imitative_filter_defense_prompt,
+        # New: news_log + correlation + caption
+        test_news_log_write_read,
+        test_keyword_extraction_returns_list,
+        test_correlation_engine_rebuild_empty_log,
+        test_reasoner_returns_caption_field,
+        test_caption_max_160_chars,
     ]:
         fn()
 
