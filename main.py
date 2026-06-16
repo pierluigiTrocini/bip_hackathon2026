@@ -116,7 +116,7 @@ def main():
                 discovery_prompt, tool_executor, t_behavior, dashboard
             )
             dashboard.print_discovery_candidates(candidates)
-            result = dashboard.confirm_or_reprompt(candidates)
+            result = dashboard.confirm_or_reprompt(candidates, timeout_seconds=adaptive_timeout.t_wait())
 
             if result["action"] == "confirm":
                 confirmed_tickers = result["tickers"]
@@ -137,6 +137,12 @@ def main():
         )
         dashboard.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", "info")
         dashboard.log("", "info")
+
+    # Step 3c: Show current portfolio positions (new session + resume)
+    dashboard.log("Recupero posizioni aperte nel portfolio…", "info")
+    _portfolio_result = tool_executor.get_portfolio()
+    _positions = _portfolio_result.data.get("positions", {}) if _portfolio_result.ok else {}
+    dashboard.print_portfolio_positions(_positions)
 
     # Step 4: Start loop
     loop = AgentLoop(

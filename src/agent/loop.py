@@ -1,4 +1,5 @@
 import concurrent.futures
+import threading
 import time
 from datetime import datetime, timezone
 
@@ -77,6 +78,53 @@ class AgentLoop:
     def _graceful_stop_tasks(self) -> None:
         self._broker.cancel_all_orders()
 
+    def _run_interaction(self, mode: str, context: dict) -> None:
+        """
+        Background thread: let the user modify agent behavior without blocking the cycle.
+        Calls behavior_manager.request_change() when the user submits — applied next cycle.
+        """
+        from src.agent.behavior_questionnaire import generate_questions, synthesize_prompt
+
+        d = self._dashboard
+        try:
+            if mode == "prompt_change":
+                d.log("", "info")
+                d.log("━━━ MODIFICA COMPORTAMENTO (in background) ━━━━━━━━━━━━━━━━━━━━━━━━━", "warn")
+                d.log(f"  Prompt attuale: {context['active_prompt'][:80]}", "info")
+                new_prompt = d.interactive_input(
+                    "\n[bold cyan]Inserisci il nuovo comportamento dell'agente:[/bold cyan]"
+                )
+                if new_prompt:
+                    self._bm.request_change(new_prompt)
+                    d.log(f"  Comportamento in coda: {new_prompt[:70]}", "ok")
+                else:
+                    d.log("  Nessuna modifica inserita.", "info")
+                d.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", "info")
+
+            elif mode == "questionnaire":
+                d.log("", "info")
+                d.log("━━━ QUESTIONARIO STRATEGIA (in background) ━━━━━━━━━━━━━━━━━━━━━━━━", "warn")
+                d.log("  Generazione domande in corso…", "info")
+                t_behavior = self._at.t_behavior()
+                questions = generate_questions(context, t_behavior)
+                answers: list[str] = []
+                for i, q in enumerate(questions, 1):
+                    ans = d.interactive_input(
+                        f"\n[bold cyan]{i}/{len(questions)}.[/bold cyan] {q}"
+                    )
+                    answers.append(ans if ans else "(nessuna risposta)")
+
+                d.log("  Sintesi delle risposte in corso…", "info")
+                new_prompt = synthesize_prompt(
+                    context["active_prompt"], questions, answers, t_behavior
+                )
+                self._bm.request_change(new_prompt)
+                d.log(f"  Nuovo comportamento in coda: {new_prompt[:70]}", "ok")
+                d.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", "info")
+
+        except Exception as exc:
+            d.log(f"  Errore interazione background: {exc}", "err")
+
     def _run_cycle(self) -> None:
         if self._bm.change_requested:
             self._dashboard.log("Applicazione cambio comportamento…", "warn")
@@ -104,7 +152,21 @@ class AgentLoop:
         last_entry: dict = {}
         cycle_rows: list[dict] = []  # accumulate per-ticker results for end-of-cycle summary
 
-        for ticker in self._tickers:
+        # Extend ticker list with any positions currently held that are NOT in discovery list
+        _initial_portfolio = self._te.get_portfolio()
+        _held = set(
+            _initial_portfolio.data.get("positions", {}).keys()
+        ) if _initial_portfolio.ok else set()
+        _extra = [t for t in _held if t not in self._tickers]
+        effective_tickers = list(self._tickers) + _extra
+
+        if _extra:
+            self._dashboard.log(
+                f"  + posizioni aperte non in discovery: [{', '.join(_extra)}] — incluse nel ciclo",
+                "warn",
+            )
+
+        for ticker in effective_tickers:
             if ticker in self._te._blacklisted:
                 self._dashboard.log(f"  {ticker} → blacklistato, skip", "warn")
                 continue
@@ -368,9 +430,28 @@ class AgentLoop:
         )
         result = self._dashboard.wait_for_user_input(wait_seconds)
 
-        if result["source"] == "behavior_change":
-            self._bm.request_change(result["data"]["new_prompt"])
-            self._dashboard.log("  Cambio comportamento in coda per il prossimo ciclo.", "warn")
+        if result["source"] in ("prompt_change", "questionnaire"):
+            # Non-blocking: spawn background thread, cycle continues immediately
+            context = {
+                "active_prompt": active_prompt,
+                "tickers": effective_tickers,
+                "pnl_pct": pnl_pct if cycle_rows else 0.0,
+                "mode": mode if cycle_rows else "normal",
+                "recent_actions": "  ".join(
+                    f"{r['ticker']}:{r['action'].upper()}" for r in cycle_rows[-3:]
+                ),
+            }
+            t = threading.Thread(
+                target=self._run_interaction,
+                args=(result["source"], context),
+                daemon=True,
+            )
+            t.start()
+            mode_label = "prompt" if result["source"] == "prompt_change" else "questionario"
+            self._dashboard.log(
+                f"  Interazione {mode_label} avviata in background — ciclo successivo in corso…",
+                "warn",
+            )
         elif result["source"] == "override" and last_entry:
             ov = result["data"]
             self._dashboard.log(

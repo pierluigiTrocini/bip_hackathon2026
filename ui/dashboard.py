@@ -118,7 +118,13 @@ class Dashboard:
 
         # Countdown bar
         bar = "█" * (countdown * 20 // max(t_wait, 1)) + "░" * (20 - countdown * 20 // max(t_wait, 1))
-        countdown_line = f"⏳ {countdown}s [{bar}] │ [INVIO] conferma │ [m] modifica │ [c] cambia"
+        countdown_line = (
+            f"⏳ {countdown}s [{bar}] │ "
+            "[bold]INVIO[/bold] conferma · "
+            "[bold cyan]p[/bold cyan] modifica prompt · "
+            "[bold cyan]q[/bold cyan] questionario · "
+            "[bold yellow]m[/bold yellow] override ordine"
+        )
 
         header = (
             f"[bold]BIP Trading Agent[/bold]  │  "
@@ -168,26 +174,34 @@ class Dashboard:
 
         if user_input is None:
             return {"source": "timeout", "data": {}}
-        user_input = user_input.strip()
+        user_input = user_input.strip().lower()
         if user_input == "":
             return {"source": "confirmed", "data": {}}
-        if user_input.lower() == "m":
-            _console.print("Override manuale — inserisci: TICKER SIDE QTY (es: AAPL buy 5)")
+        if user_input == "p":
+            # Return immediately — caller spawns background prompt thread
+            return {"source": "prompt_change", "data": {}}
+        if user_input == "q":
+            # Return immediately — caller spawns background questionnaire thread
+            return {"source": "questionnaire", "data": {}}
+        if user_input == "m":
+            _console.print("[bold yellow]Override manuale[/bold yellow] — inserisci: TICKER SIDE QTY (es: AAPL buy 5)")
             raw = input("> ").strip().split()
             if len(raw) == 3:
                 ticker, side, qty_str = raw
                 try:
-                    return {"source": "override", "data": {"action": side, "ticker": ticker, "qty": int(qty_str)}}
+                    return {"source": "override", "data": {"action": side, "ticker": ticker.upper(), "qty": int(qty_str)}}
                 except ValueError:
                     pass
             return {"source": "confirmed", "data": {}}
-        if user_input.lower() == "c":
-            _console.print("Inserisci il nuovo comportamento dell'agente:")
-            new_prompt = input("> ").strip()
-            if new_prompt:
-                return {"source": "behavior_change", "data": {"new_prompt": new_prompt}}
-            return {"source": "confirmed", "data": {}}
         return {"source": "confirmed", "data": {}}
+
+    def interactive_input(self, prompt_text: str) -> str:
+        """Styled prompt for interactive input during background interaction."""
+        _console.print(prompt_text)
+        try:
+            return input("> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return ""
 
     def print_discovery_candidates(self, candidates: list[dict]) -> None:
         table = Table(
@@ -249,9 +263,58 @@ class Dashboard:
             )
         )
 
-    def confirm_or_reprompt(self, candidates: list[dict]) -> dict:
+    def print_portfolio_positions(self, positions: dict) -> None:
+        """Display currently held positions fetched from Alpaca."""
+        if not positions:
+            _console.print(
+                Panel(
+                    "[dim]Nessuna posizione aperta nel portfolio.[/dim]",
+                    title="[bold cyan]◆ PORTFOLIO — Posizioni aperte[/bold cyan]",
+                    border_style="cyan",
+                    padding=(0, 2),
+                )
+            )
+            return
+
+        table = Table(
+            show_header=True,
+            header_style="bold cyan",
+            box=None,
+            padding=(0, 2),
+        )
+        table.add_column("Ticker", style="bold", min_width=8)
+        table.add_column("Qtà", justify="right", min_width=6)
+        table.add_column("Prezzo medio", justify="right", min_width=14)
+        table.add_column("Valore mercato", justify="right", min_width=16)
+
+        total_value = 0.0
+        for ticker, pos in sorted(positions.items()):
+            qty = pos.get("qty", 0)
+            avg = pos.get("avg_entry_price", 0.0)
+            mktval = pos.get("market_value", 0.0)
+            total_value += mktval
+            table.add_row(
+                f"[cyan]{ticker}[/cyan]",
+                str(qty),
+                f"${avg:,.2f}",
+                f"${mktval:,.2f}",
+            )
+
+        subtitle = f"[dim]Valore totale posizioni: [bold]${total_value:,.2f}[/bold][/dim]"
+        _console.print(
+            Panel(
+                table,
+                title="[bold cyan]◆ PORTFOLIO — Posizioni aperte[/bold cyan]",
+                subtitle=subtitle,
+                border_style="cyan",
+                padding=(1, 2),
+            )
+        )
+
+    def confirm_or_reprompt(self, candidates: list[dict], timeout_seconds: int = 30) -> dict:
         """
         Show the proposed ticker list and ask the user to confirm or provide a new prompt.
+        Auto-confirms with default tickers if the timeout expires.
 
         Returns:
           {"action": "confirm", "tickers": [...]}
@@ -259,16 +322,53 @@ class Dashboard:
         """
         default = [c["ticker"] for c in candidates if c.get("valid", True)]
         default_str = ", ".join(default)
-        _console.print(
-            f"\n[bold]Ticker proposti dall'agente:[/bold] [cyan]{default_str}[/cyan]\n"
-            f"  [dim]Premi INVIO per confermare, oppure inserisci un nuovo prompt "
-            f"per avviare una nuova ricerca:[/dim]"
-        )
-        try:
-            raw = input("> ").strip()
-        except (EOFError, KeyboardInterrupt):
-            raw = ""
 
+        def _build_confirm_panel(remaining: int) -> Panel:
+            bar_filled = remaining * 20 // max(timeout_seconds, 1)
+            bar = "█" * bar_filled + "░" * (20 - bar_filled)
+            return Panel(
+                f"[bold]Ticker proposti:[/bold] [cyan]{default_str}[/cyan]\n\n"
+                f"⏳ {remaining}s [{bar}] │ "
+                "[bold]INVIO[/bold] conferma · "
+                "[bold cyan]testo+INVIO[/bold cyan] nuovo prompt · "
+                "[dim]timeout = auto-conferma[/dim]\n> ",
+                title="[bold magenta]Conferma Discovery[/bold magenta]",
+                border_style="magenta",
+            )
+
+        def _read_input():
+            try:
+                return input()
+            except (EOFError, KeyboardInterrupt):
+                return None
+
+        with Live(
+            _build_confirm_panel(timeout_seconds),
+            console=_console,
+            refresh_per_second=1,
+            transient=True,
+        ) as live:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                fut = pool.submit(_read_input)
+                deadline = time.monotonic() + timeout_seconds
+                while time.monotonic() < deadline:
+                    remaining = max(0, int(deadline - time.monotonic()))
+                    live.update(_build_confirm_panel(remaining))
+                    if fut.done():
+                        break
+                    time.sleep(0.5)
+
+                try:
+                    user_input = fut.result(timeout=0.1)
+                except concurrent.futures.TimeoutError:
+                    fut.cancel()
+                    user_input = None
+
+        if user_input is None:
+            _console.print(f"[green]✓ Auto-confermati (timeout):[/green] {default_str}")
+            return {"action": "confirm", "tickers": default}
+
+        raw = user_input.strip()
         if not raw:
             _console.print(f"[green]✓ Confermati:[/green] {default_str}")
             return {"action": "confirm", "tickers": default}
