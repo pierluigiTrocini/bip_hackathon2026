@@ -126,7 +126,8 @@ class Dashboard:
         countdown_line = (
             f"⏳ {countdown}s [{bar}] │ "
             "[bold]INVIO[/bold] conferma · "
-            "[bold cyan]p[/bold cyan] modifica prompt · "
+            "[bold cyan]a[/bold cyan] aggiungi istruzione · "
+            "[bold cyan]p[/bold cyan] cambia prompt · "
             "[bold cyan]q[/bold cyan] questionario · "
             "[bold yellow]m[/bold yellow] override ordine"
         )
@@ -189,6 +190,8 @@ class Dashboard:
         user_input = user_input.strip().lower()
         if user_input == "":
             return {"source": "confirmed", "data": {}}
+        if user_input == "a":
+            return {"source": "prompt_append", "data": {}}
         if user_input == "p":
             return {"source": "prompt_change", "data": {}}
         if user_input == "q":

@@ -1,4 +1,6 @@
 import concurrent.futures
+import select
+import sys
 import threading
 import time
 from datetime import datetime, timezone
@@ -49,6 +51,9 @@ class AgentLoop:
         self._tickers: list[str] = tickers if tickers else config.TICKERS
         self._interaction_running = False
         self._interaction_lock = threading.Lock()
+        self._in_wait_phase = False       # True while wait_for_user_input or _run_interaction owns stdin
+        self._pause_requested = False     # set by _stdin_listener when user types mid-cycle
+        self._pending_injection = ""      # text captured by _stdin_listener
 
         # propagate session_id to sub-modules
         sid = session.get("session_id", "")
@@ -56,8 +61,32 @@ class AgentLoop:
         self._reasoner._session_id = sid
         self._broker._session_id = sid
 
+    def _stdin_listener(self) -> None:
+        """Background thread: captures free-text input typed during cycle execution.
+        Pauses automatically when _in_wait_phase is True (stdin owned by wait/interaction).
+        Triggers _pause_requested so _run_cycle can stop between tickers and handle it.
+        """
+        while self._running:
+            if self._in_wait_phase or self._pause_requested:
+                time.sleep(0.1)
+                continue
+            try:
+                ready, _, _ = select.select([sys.stdin], [], [], 0.5)
+            except Exception:
+                time.sleep(0.2)
+                continue
+            if ready and not self._in_wait_phase and not self._pause_requested:
+                try:
+                    line = sys.stdin.readline().strip()
+                    if len(line) >= 3:
+                        self._pending_injection = line
+                        self._pause_requested = True
+                except Exception:
+                    pass
+
     def start(self) -> None:
         self._running = True
+        threading.Thread(target=self._stdin_listener, daemon=True).start()
         while self._running:
             try:
                 self._run_cycle()
@@ -80,16 +109,55 @@ class AgentLoop:
     def _graceful_stop_tasks(self) -> None:
         self._broker.cancel_all_orders()
 
+    def _handle_mid_cycle_injection(self, active_prompt: str) -> None:
+        """Called when _stdin_listener captures text mid-cycle. Stops the current cycle."""
+        d = self._dashboard
+        text = self._pending_injection
+        self._pending_injection = ""
+        d.log("", "info")
+        d.log("━━━ PAUSA — INPUT RICEVUTO DURANTE ESECUZIONE ━━━━━━━━━━━━━━━━━━━━━", "err")
+        d.log(f"  Testo ricevuto: \"{text[:100]}\"", "warn")
+        d.log(f"  Prompt attuale: {active_prompt[:80]}", "info")
+        choice = d.interactive_input(
+            "\n[bold cyan](a)[/bold cyan] Aggiungi al prompt attuale  "
+            "[bold cyan](s)[/bold cyan] Sostituisci  "
+            "[bold cyan](i)[/bold cyan] Ignora"
+        )
+        choice = (choice or "a").strip().lower()
+        if choice == "i":
+            d.log("  Input ignorato — ciclo riprende.", "info")
+        elif choice == "s":
+            self._bm.request_change(text)
+            d.log(f"  Nuovo prompt (al prossimo ciclo): {text[:100]}", "ok")
+        else:
+            new_prompt = f"{active_prompt}. {text}"
+            self._bm.request_change(new_prompt)
+            d.log(f"  Istruzione aggiunta (al prossimo ciclo): {new_prompt[:100]}", "ok")
+        d.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", "info")
+
     def _run_interaction(self, mode: str, context: dict) -> None:
-        """
-        Background thread: let the user modify agent behavior without blocking the cycle.
-        Calls behavior_manager.request_change() when the user submits — applied next cycle.
-        """
+        """Synchronous user interaction (timer has stopped). Applied next cycle."""
         from src.agent.behavior_questionnaire import generate_questions, synthesize_prompt
 
         d = self._dashboard
         try:
-            if mode == "prompt_change":
+            if mode == "prompt_append":
+                d.log("", "info")
+                d.log("━━━ ISTRUZIONE AGGIUNTIVA ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", "warn")
+                d.log(f"  Prompt attuale: {context['active_prompt'][:80]}", "info")
+                addition = d.interactive_input(
+                    "\n[bold cyan]Inserisci l'istruzione aggiuntiva:[/bold cyan]"
+                )
+                if addition:
+                    new_prompt = f"{context['active_prompt']}. {addition}"
+                    self._bm.request_change(new_prompt)
+                    d.log(f"  Aggiunto: {addition[:70]}", "ok")
+                    d.log(f"  Nuovo prompt: {new_prompt[:100]}", "info")
+                else:
+                    d.log("  Nessuna istruzione inserita.", "info")
+                d.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", "info")
+
+            elif mode == "prompt_change":
                 d.log("", "info")
                 d.log("━━━ MODIFICA COMPORTAMENTO (in background) ━━━━━━━━━━━━━━━━━━━━━━━━━", "warn")
                 d.log(f"  Prompt attuale: {context['active_prompt'][:80]}", "info")
@@ -183,7 +251,17 @@ class AgentLoop:
                 "warn",
             )
 
+        _cycle_interrupted = False
         for ticker in effective_tickers:
+            # Mid-cycle stop: user typed something during execution
+            if self._pause_requested:
+                self._in_wait_phase = True
+                self._handle_mid_cycle_injection(active_prompt)
+                self._in_wait_phase = False
+                self._pause_requested = False
+                _cycle_interrupted = True
+                break
+
             if ticker in self._te._blacklisted:
                 self._dashboard.log(f"  {ticker} → blacklistato, skip", "warn")
                 continue
@@ -424,53 +502,48 @@ class AgentLoop:
             self._dashboard.log("  [10] Ricalibrazione timeout adattivo (background)…", "info")
             threading.Thread(target=self._at.calibrate, daemon=True).start()
 
-        # 12. WAIT with user input window (R10: always from adaptive_timeout)
+        # 12. WAIT — skip if cycle was interrupted mid-way by user injection
+        if _cycle_interrupted:
+            self._dashboard.log("  Ciclo interrotto — nuovo comportamento applicato al prossimo ciclo.", "warn")
+            self._sm.save(self._session)
+            return
+
         wait_seconds = 2 if veto_triggered else self._at.t_wait()
         if veto_triggered:
             self._dashboard.log("  [NEWS VETO] attesa ridotta a 2s", "err")
 
-        self._dashboard.print_cycle_summary(
-            cycle=self._cycle,
-            rows=cycle_rows,
-            pnl_pct=pnl_pct if cycle_rows else 0.0,
-            portfolio_value=portfolio_value if cycle_rows else 0.0,
-            cash=cash if cycle_rows else 0.0,
-            mode=mode if cycle_rows else "normal",
-            wait_seconds=wait_seconds,
-            veto=veto_triggered,
-        )
+        if cycle_rows:
+            self._dashboard.print_cycle_summary(
+                cycle=self._cycle,
+                rows=cycle_rows,
+                pnl_pct=pnl_pct,
+                portfolio_value=portfolio_value,
+                cash=cash,
+                mode=mode,
+                wait_seconds=wait_seconds,
+                veto=veto_triggered,
+            )
+
+        # Pause stdin listener during wait + interaction (it owns stdin)
+        self._in_wait_phase = True
         result = self._dashboard.wait_for_user_input(wait_seconds)
+        self._in_wait_phase = False
 
-        if result["source"] in ("prompt_change", "questionnaire"):
-            with self._interaction_lock:
-                already_running = self._interaction_running
-                if not already_running:
-                    self._interaction_running = True
-
-            if already_running:
-                self._dashboard.log("  Interazione già in corso — attendi che finisca.", "warn")
-            else:
-                self._dashboard.set_interaction_in_progress(True)
-                context = {
-                    "active_prompt": active_prompt,
-                    "tickers": effective_tickers,
-                    "pnl_pct": pnl_pct if cycle_rows else 0.0,
-                    "mode": mode if cycle_rows else "normal",
-                    "recent_actions": "  ".join(
-                        f"{r['ticker']}:{r['action'].upper()}" for r in cycle_rows[-3:]
-                    ),
-                }
-                t = threading.Thread(
-                    target=self._run_interaction,
-                    args=(result["source"], context),
-                    daemon=True,
-                )
-                t.start()
-                mode_label = "prompt" if result["source"] == "prompt_change" else "questionario"
-                self._dashboard.log(
-                    f"  Interazione {mode_label} avviata in background — ciclo successivo in corso…",
-                    "warn",
-                )
+        if result["source"] in ("prompt_append", "prompt_change", "questionnaire"):
+            # Synchronous: timer stopped, user interacts, then cycle resumes
+            interaction_context = {
+                "active_prompt": active_prompt,
+                "tickers": effective_tickers,
+                "pnl_pct": pnl_pct if cycle_rows else 0.0,
+                "mode": mode if cycle_rows else "normal",
+                "recent_actions": "  ".join(
+                    f"{r['ticker']}:{r['action'].upper()}" for r in cycle_rows[-3:]
+                ),
+            }
+            self._in_wait_phase = True
+            self._interaction_running = True
+            self._run_interaction(result["source"], interaction_context)
+            self._in_wait_phase = False
         elif result["source"] == "override" and last_entry:
             ov = result["data"]
             self._dashboard.log(
