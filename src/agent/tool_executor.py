@@ -165,7 +165,12 @@ class ToolExecutor:
                 data = resp.json()
                 raw_articles = data.get("news", [])
                 articles = [
-                    {"title": a.get("headline", ""), "summary": a.get("summary", "")}
+                    {
+                        "title":   a.get("headline", ""),
+                        "summary": a.get("summary", ""),
+                        "source":  a.get("source", ""),
+                        "url":     a.get("url", ""),
+                    }
                     for a in raw_articles[:3]
                 ]
                 return ToolResult(ok=True, data={"ticker": ticker, "articles": articles})
@@ -222,8 +227,10 @@ class ToolExecutor:
                 raw = resp.json().get("news", [])
                 articles = [
                     {
-                        "title": a.get("headline", ""),
+                        "title":   a.get("headline", ""),
                         "summary": a.get("summary", ""),
+                        "source":  a.get("source", ""),
+                        "url":     a.get("url", ""),
                         "symbols": a.get("symbols", []),
                     }
                     for a in raw[:limit]
