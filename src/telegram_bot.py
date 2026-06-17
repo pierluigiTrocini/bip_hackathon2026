@@ -299,24 +299,39 @@ class TelegramNotifier:
             with self._lock:
                 tickers = list(self._tickers)
                 rows    = list(self._last_cycle_rows)
-            if not self._ce or not tickers:
-                await update.message.reply_text("Technical data not available\\.", parse_mode="MarkdownV2")
+                cycle   = self._last_cycle
+
+            # Fall back to tickers from last cycle rows if notify_cycle_end not called yet
+            if not tickers and rows:
+                tickers = list({r["ticker"] for r in rows})
+
+            if not rows and not tickers:
+                await update.message.reply_text(
+                    "No data yet \\— wait for the first cycle to complete\\.",
+                    parse_mode="MarkdownV2",
+                )
                 return
-            lines = [f"*🔬 Technical stats \\— cycle {self._last_cycle}*", ""]
+
+            lines = [f"*🔬 Technical stats \\— cycle {cycle}*", ""]
 
             # NCCI matrix
-            if len(tickers) >= 2:
+            if self._ce and len(tickers) >= 2:
                 lines.append("*NCCI matrix \\(news correlation\\):*")
-                lines.append("`          " + "  ".join(f"{t[:4]:>4}" for t in tickers) + "`")
+                lines.append("`     " + "  ".join(f"{t[:4]:>4}" for t in tickers) + "`")
+                has_values = False
                 for ta in tickers:
                     row_vals = []
                     for tb in tickers:
                         if ta == tb:
-                            row_vals.append("  1.0")
+                            row_vals.append(" 1.0")
                         else:
                             v = self._ce.get_ncci(ta, tb)
-                            row_vals.append(f"{v:+.2f}" if v else "   —")
+                            if v:
+                                has_values = True
+                            row_vals.append(f"{v:+.2f}" if v else "  —")
                     lines.append(f"`{ta[:4]:>4}  {'  '.join(row_vals)}`")
+                if not has_values:
+                    lines.append("_\\(NCCI not yet computed — needs more cycles\\)_")
                 lines.append("")
 
             # Per-ticker technical snapshot
@@ -326,12 +341,14 @@ class TelegramNotifier:
                     upnl = r.get("unrealized_pnl_pct")
                     upnl_str = f"{upnl:+.1%}" if upnl is not None else "—"
                     entry = r.get("avg_entry_price")
-                    entry_str = f"${entry:,.2f}" if entry else "—"
+                    entry_str = f"\\${entry:,.2f}" if entry else "—"
                     lines.append(
-                        f"  *{_esc(r['ticker'])}*  trend:{_esc(r['trend'])}  "
-                        f"sent:{r['sentiment_score']:+.2f}  "
+                        f"  *{_esc(r['ticker'])}*  trend:{_esc(r.get('trend','—'))}  "
+                        f"sent:{r.get('sentiment_score', 0.0):+.2f}  "
                         f"P\\&L:{_esc(upnl_str)}  entry:{_esc(entry_str)}"
                     )
+            else:
+                lines.append("_No cycle rows yet\\._")
 
             await update.message.reply_text("\n".join(lines), parse_mode="MarkdownV2", disable_web_page_preview=True)
 
