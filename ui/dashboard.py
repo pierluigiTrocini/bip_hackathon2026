@@ -4,6 +4,9 @@ import sys
 import threading
 import time
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+
+_NY_TZ = ZoneInfo("America/New_York")
 
 from rich.console import Console
 from rich.layout import Layout
@@ -18,17 +21,30 @@ from src.agent import config
 _console = Console()
 
 _STEP_COLORS = {
-    "info":    "cyan",
-    "ok":      "green",
+    "info":    "white",
+    "cycle":   "bold cyan",
+    "ok":      "cyan",
     "warn":    "yellow",
-    "err":     "red",
-    "action":  "bold magenta",
-    "wait":    "dim",
+    "err":     "bold red",
+    "action":  "bold dark_orange",
+    "wait":    "dark_orange",
 }
 
 
+def _action_badge(action: str) -> str:
+    badges = {
+        "buy":  "[bold black on green] ▲ BUY  [/bold black on green]",
+        "sell": "[bold white on red] ▼ SELL [/bold white on red]",
+        "hold": "[bold white on yellow] ■ HOLD [/bold white on yellow]",
+        "veto": "[bold white on magenta] ⊘ VETO [/bold white on magenta]",
+    }
+    return badges.get(action.lower(), f"[white]{action.upper()}[/white]")
+
+
 def _now_ts() -> str:
-    return datetime.now(timezone.utc).strftime("%H:%M:%S")
+    local = datetime.now().strftime("%H:%M:%S")
+    ny = datetime.now(tz=_NY_TZ).strftime("%H:%M:%S")
+    return f"{local} IT / {ny} NY"
 
 
 class Dashboard:
@@ -99,12 +115,11 @@ class Dashboard:
 
         proposal_lines: list[str] = []
         for sym, entry in proposals.items():
-            action = entry.get("action", "?").upper()
+            action = entry.get("action", "?")
             conf = entry.get("conf", 0.0)
             reasoning = entry.get("reasoning", "")[:70]
-            color = {"BUY": "green", "SELL": "red", "HOLD": "yellow"}.get(action, "white")
             proposal_lines.append(
-                f"[{color}]{sym} → {action}[/{color}] (conf: {conf:.2f}) {reasoning}"
+                f"[bold white]{sym}[/bold white] → {_action_badge(action)} [dim]conf:{conf:.2f}[/dim]  {reasoning}"
             )
         proposals_text = "\n".join(proposal_lines) if proposal_lines else "Waiting for first cycle…"
 
@@ -112,45 +127,48 @@ class Dashboard:
         for e in journal_tail[-5:]:
             ts = e.get("ts", "")[-8:-3] if e.get("ts") else "--:--"
             sym = e.get("ticker", "?")
-            act = e.get("action", "?").upper()
+            act = e.get("action", "?")
             conf = e.get("conf", 0.0)
             sentiment = e.get("sentiment", 0.0)
             outcome = e.get("outcome_pct")
-            outcome_str = f"outcome:{outcome:+.1f}%" if outcome is not None else "[dim]pending[/dim]"
-            stale_str = " [yellow][STALE][/yellow]" if e.get("stale_penalty", 0) > 0 else ""
-            act_color = {"BUY": "green", "SELL": "red", "HOLD": "yellow"}.get(act, "white")
+            outcome_col = "bright_green" if outcome and outcome > 0 else "red" if outcome and outcome < 0 else ""
+            outcome_str = (
+                f"[{outcome_col}]{outcome:+.1f}%[/{outcome_col}]" if outcome is not None
+                else "[dim]pending[/dim]"
+            )
+            stale_str = " [bold yellow]⚠ STALE[/bold yellow]" if e.get("stale_penalty", 0) > 0 else ""
             journal_lines.append(
-                f"[{ts}] {sym} [{act_color}]{act}[/{act_color}] {conf:.2f}  {sentiment:+.2f}  {outcome_str}{stale_str}"
+                f"[dim]{ts}[/dim] [bold white]{sym}[/bold white] {_action_badge(act)} [dim]{conf:.2f}  {sentiment:+.2f}[/dim]  {outcome_str}{stale_str}"
             )
         journal_text = "\n".join(journal_lines) if journal_lines else "No entries yet."
 
-        bar = "█" * (countdown * 20 // max(t_wait, 1)) + "░" * (20 - countdown * 20 // max(t_wait, 1))
+        filled = countdown * 20 // max(t_wait, 1)
+        bar = "[dark_orange]" + "█" * filled + "[/dark_orange]" + "[dim]" + "░" * (20 - filled) + "[/dim]"
         countdown_line = (
-            f"⏳ {countdown}s [{bar}] │ "
-            "[bold]INVIO[/bold] conferma · "
-            "[bold cyan]a[/bold cyan] istruzione · "
-            "[bold cyan]p[/bold cyan] prompt · "
-            "[bold cyan]q[/bold cyan] questionario · "
-            "[bold cyan]s[/bold cyan] strategia · "
-            "[bold yellow]m[/bold yellow] override"
+            f"[bold dark_orange]⏳ {countdown}s[/bold dark_orange]  {bar}  │  "
+            "[bold white]INVIO[/bold white] conferma · "
+            "[dark_orange]a[/dark_orange] istruzione · "
+            "[dark_orange]p[/dark_orange] prompt · "
+            "[dark_orange]q[/dark_orange] questionario · "
+            "[dark_orange]s[/dark_orange] strategia · "
+            "[dark_orange]m[/dark_orange] override"
         )
 
         header = (
-            f"[bold]BIP Trading Agent[/bold]  │  "
-            f"Sessione: {str(session_id)[:8]}…  │  "
-            f"Ciclo: {cycle}  │  "
-            f"Strategia: [bold cyan]{strategy}[/bold cyan]  │  {_now_ts()}"
+            f"[bold white]BIP Trading Agent[/bold white]  │  "
+            f"[dim]Sessione: {str(session_id)[:8]}…  Ciclo: {cycle}[/dim]  │  "
+            f"[bold dark_orange]{strategy}[/bold dark_orange]  │  [dim]{_now_ts()}[/dim]"
         )
 
         body = (
-            f"[bold cyan]PORTFOLIO[/bold cyan]\n{_table_str(portfolio_table)}\n\n"
-            f"[bold cyan]TIMEOUT[/bold cyan]  T_wait:{t_wait}s  T_behavior:{t_behavior}s\n\n"
-            f"[bold cyan]PROPOSTA AGENTE[/bold cyan]\n{proposals_text}\n\n"
-            f"[bold cyan]JOURNAL (ultimi 5)[/bold cyan]\n{journal_text}\n\n"
+            f"[bold white]PORTFOLIO[/bold white]\n{_table_str(portfolio_table)}\n\n"
+            f"[dim]T_wait:{t_wait}s  T_behavior:{t_behavior}s[/dim]\n\n"
+            f"[bold white]PROPOSTA AGENTE[/bold white]\n{proposals_text}\n\n"
+            f"[bold white]JOURNAL (ultimi 5)[/bold white]\n{journal_text}\n\n"
             f"{countdown_line}\n> "
         )
 
-        return Panel(body, title=header, border_style="blue")
+        return Panel(body, title=header, border_style="dark_orange")
 
     def wait_for_user_input(self, timeout_seconds: int) -> dict:
         with self._lock:
@@ -442,11 +460,11 @@ class Dashboard:
     ) -> None:
         table = Table(
             show_header=True,
-            header_style="bold cyan",
+            header_style="bold white",
             box=None,
             padding=(0, 1),
         )
-        table.add_column("Ticker", style="bold", min_width=6)
+        table.add_column("Ticker", style="bold white", min_width=6)
         table.add_column("Prezzo", justify="right", min_width=10)
         table.add_column("Trend", min_width=5)
         table.add_column("Sentiment", min_width=16)
@@ -456,66 +474,65 @@ class Dashboard:
         table.add_column("Ordine", min_width=8)
         table.add_column("Perché", min_width=45, no_wrap=False)
 
-        action_color = {"buy": "green", "sell": "red", "hold": "yellow"}
-        trend_symbol = {"up": "↑", "down": "↓", "flat": "→"}
+        trend_symbol = {"up": "[bright_green]↑[/bright_green]", "down": "[bright_red]↓[/bright_red]", "flat": "[dim]→[/dim]"}
         sentiment_color = {
-            "positive": "green", "negative": "red",
-            "neutral": "white", "very_negative": "red", "very_positive": "green",
+            "positive":      "bright_green",
+            "very_positive": "bold bright_green",
+            "negative":      "bright_red",
+            "very_negative": "bold bright_red",
+            "neutral":       "white",
         }
 
         for r in rows:
             act = r["action"]
-            act_col = action_color.get(act, "white")
-            stale_tag = " [STALE]" if r.get("stale") else ""
-            price_str = f"${r['price']:,.2f}{stale_tag}"
+            stale_tag = " [bold yellow]⚠[/bold yellow]" if r.get("stale") else ""
+            price_str = f"[white]${r['price']:,.2f}[/white]{stale_tag}"
             trend_s = trend_symbol.get(r["trend"], r["trend"])
             sent_label = r["sentiment_label"]
             sent_score = r["sentiment_score"]
             sent_col = sentiment_color.get(sent_label, "white")
-            order_str = "✓ inviato" if r.get("order_id") else "—"
+            order_str = "[bright_green]✓ inviato[/bright_green]" if r.get("order_id") else "[dim]—[/dim]"
 
-            # Unrealized P&L display
             upnl = r.get("unrealized_pnl_pct")
             if upnl is not None:
-                upnl_col = "green" if upnl >= 0.02 else "red" if upnl <= -0.03 else "white"
+                upnl_col = "bright_green" if upnl >= 0.02 else "bright_red" if upnl <= -0.03 else "white"
                 upnl_str = f"[{upnl_col}]{upnl:+.1%}[/{upnl_col}]"
             else:
                 upnl_str = "[dim]—[/dim]"
 
-            # Reasoning — show up to 80 chars in table
             reasoning_text = (r["reasoning"] or "")
-            reasoning_short = reasoning_text[:78] + ("…" if len(reasoning_text) > 78 else "")
+            reasoning_short = "[dim]" + reasoning_text[:78] + ("…" if len(reasoning_text) > 78 else "") + "[/dim]"
 
             table.add_row(
                 r["ticker"],
                 price_str,
                 trend_s,
                 f"[{sent_col}]{sent_label} ({sent_score:+.2f})[/{sent_col}]",
-                f"[{act_col}]{act.upper()}[/{act_col}]",
-                f"{r['conf']:.2f}",
+                _action_badge(act),
+                f"[white]{r['conf']:.2f}[/white]",
                 upnl_str,
                 order_str,
                 reasoning_short,
             )
 
-        pnl_col = "green" if pnl_pct >= 0 else "red"
-        mode_str = "[red]CONSERVATIVE[/red]" if mode == "conservative" else "[green]NORMAL[/green]"
-        veto_str = "  [red][NEWS VETO][/red]" if veto else ""
-        strat_str = f"  Strategia: [bold cyan]{strategy_name}[/bold cyan]" if strategy_name else ""
+        pnl_col = "bright_green" if pnl_pct >= 0 else "bright_red"
+        mode_str = "[bold red]● CONSERVATIVE[/bold red]" if mode == "conservative" else "[bright_green]● NORMAL[/bright_green]"
+        veto_str = "  [bold red]⊘ NEWS VETO[/bold red]" if veto else ""
+        strat_str = f"  [bold dark_orange]{strategy_name}[/bold dark_orange]" if strategy_name else ""
         footer = (
-            f"Portfolio: [bold]${portfolio_value:,.2f}[/bold]  "
-            f"Cash: ${cash:,.2f}  "
+            f"Portfolio: [bold white]${portfolio_value:,.2f}[/bold white]  "
+            f"Cash: [white]${cash:,.2f}[/white]  "
             f"P&L: [{pnl_col}]{pnl_pct:+.2%}[/{pnl_col}]  "
-            f"Modalità: {mode_str}{strat_str}{veto_str}\n"
-            f"[dim]Prossimo ciclo tra {wait_seconds}s — INVIO · [a] istruzione · [p] prompt · [q] questionario · [s] strategia · [m] override[/dim]"
+            f"{mode_str}{strat_str}{veto_str}\n"
+            f"[dim]Prossimo ciclo tra [/dim][bold dark_orange]{wait_seconds}s[/bold dark_orange][dim] — INVIO · a · p · q · s · m[/dim]"
         )
 
         _console.print(
             Panel(
                 table if rows else Text("Nessun ticker elaborato in questo ciclo.", style="dim"),
-                title=f"[bold blue]◆ CICLO {cycle} — RIEPILOGO[/bold blue]",
+                title=f"[bold white]◆ CICLO {cycle} — RIEPILOGO[/bold white]",
                 subtitle=footer,
-                border_style="blue",
+                border_style="white",
                 padding=(1, 2),
             )
         )
@@ -532,28 +549,27 @@ class Dashboard:
         Print a Rich Panel immediately after a decision, outside the Live context.
         Uses Console.print() directly — never wraps inside Live.
         """
-        action_upper = action.upper()
         border_colors = {
             "buy":  "green",
             "sell": "red",
             "hold": "yellow",
             "veto": "magenta",
         }
-        border = border_colors.get(action.lower(), "blue")
-        title = f"{ticker} — {action_upper}  (conf: {confidence:.2f})"
+        border = border_colors.get(action.lower(), "white")
+        badge = _action_badge(action)
+        title = f"[bold white]{ticker}[/bold white]  {badge}  [dim]conf: {confidence:.2f}[/dim]"
 
         lines: list[str] = []
 
         if caption:
-            from rich.text import Text as RichText
             wrapped = caption[:160]
-            lines.append(f"[bold white]💬 {wrapped}[/bold white]")
+            lines.append(f"[white]💬 {wrapped}[/white]")
         else:
             lines.append("[dim]Nessuna spiegazione disponibile.[/dim]")
 
         if articles:
             lines.append("")
-            lines.append("[bold dim]Notizie a supporto:[/bold dim]")
+            lines.append("[bold white]Notizie a supporto:[/bold white]")
             for i, art in enumerate(articles):
                 if i > 0:
                     lines.append("")
@@ -563,9 +579,9 @@ class Dashboard:
 
                 src_padded = source[:12].ljust(12)
                 title_truncated = title_art[:70] + ("…" if len(title_art) > 70 else "")
-                lines.append(f"[bold cyan]{src_padded}[/bold cyan]  ·  {title_truncated}")
+                lines.append(f"[bold white]{src_padded}[/bold white]  [white]{title_truncated}[/white]")
                 if url:
-                    lines.append(f"{'':14}{url}")
+                    lines.append(f"{'':14}[cyan]{url}[/cyan]")
         else:
             lines.append("")
             lines.append("[dim]Nessuna notizia disponibile per questo ciclo.[/dim]")
@@ -574,7 +590,7 @@ class Dashboard:
         _console.print(
             Panel(
                 body,
-                title=f"[bold]{title}[/bold]",
+                title=title,
                 border_style=border,
                 padding=(1, 2),
             )
