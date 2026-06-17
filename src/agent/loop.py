@@ -87,6 +87,7 @@ class AgentLoop:
         self._in_wait_phase = False
         self._pause_requested = False
         self._pending_injection = ""
+        self._pending_strategy: str | None = None  # set by Telegram thread, applied at cycle start
 
         _saved_strategy = session.get("current_strategy", strategy_library.DEFAULT_STRATEGY)
         self._current_strategy: str = (
@@ -327,6 +328,11 @@ class AgentLoop:
             self._apply_strategy_switch(new_id)
 
     def _run_cycle(self) -> None:
+        if self._pending_strategy:
+            new_id, self._pending_strategy = self._pending_strategy, None
+            if new_id in strategy_library.get_all():
+                self._apply_strategy_switch(new_id)
+
         if self._bm.change_requested:
             self._dashboard.log("Applying behaviour change…", "warn")
             self._handle_behavior_change()

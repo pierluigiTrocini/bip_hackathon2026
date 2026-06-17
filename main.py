@@ -216,7 +216,7 @@ def main():
 
     # Wire Telegram callbacks into the loop's behavior/strategy machinery
     def _tg_strategy_change(new_id: str) -> None:
-        loop._apply_strategy_switch(new_id)
+        loop._pending_strategy = new_id
 
     def _tg_prompt_change(mode: str, text: str) -> None:
         with behavior_manager._change_lock:
