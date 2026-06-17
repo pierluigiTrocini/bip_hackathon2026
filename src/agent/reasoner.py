@@ -138,6 +138,7 @@ class Reasoner:
         strategy_id: str = "contrarian",
         take_profit_hint: str = "",
         correlation_section: str = "",
+        historical_news_context: str = "",
     ) -> dict:
         positions_str = ", ".join(
             f"{sym}: {p['qty']} shares @ ${p['avg_entry_price']:.2f}"
@@ -153,6 +154,11 @@ class Reasoner:
         )
 
         correlation_block = f"\n{correlation_section}\n\n" if correlation_section else ""
+        historical_block = (
+            f"=== STORICO NEWS ({ticker} — ultimi cicli) ===\n"
+            f"{historical_news_context}\n\n"
+            if historical_news_context else ""
+        )
 
         user_prompt = (
             f"=== STRATEGY: {strategy['name'].upper()} ===\n"
@@ -167,6 +173,7 @@ class Reasoner:
             f"Price: ${price:.2f} (as of {price_timestamp})\n"
             f"MA5: ${ma5:.2f} | Trend: {trend}\n"
             f"Data stale: {stale} (staleness: {staleness_seconds}s)\n\n"
+            f"{historical_block}"
             f"=== PORTFOLIO ===\n"
             f"Cash: ${cash:,.2f} | Mode: {mode}\n"
             f"Positions: {positions_str}\n\n"

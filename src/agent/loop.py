@@ -35,6 +35,28 @@ def _extract_mentioned_tickers(article: dict) -> list[str]:
     return list({c for c in candidates if c not in _KNOWN_NON_TICKERS})
 
 
+def _format_historical_context(entries: list[dict]) -> str:
+    """
+    Format news_log historical entries into a compact prompt section.
+    Each line: bullet · timestamp · headline · sentiment · decision · top keywords.
+    """
+    if not entries:
+        return ""
+    lines = []
+    for e in entries:
+        ts = e.get("ts", "")[:16].replace("T", " ")          # "2026-06-15 09:30"
+        title = (e.get("title", "") or "")[:80]
+        score = e.get("sentiment_score", 0.0)
+        score_str = f"{score:+.2f}"
+        decision = e.get("decision_triggered") or "—"
+        kws = e.get("keywords", [])
+        kws_str = ", ".join(kws[:5]) if kws else "—"
+        lines.append(
+            f"• [{ts} UTC]  \"{title}\"  |  sentim:{score_str}  decisione:{decision}  temi:{kws_str}"
+        )
+    return "\n".join(lines)
+
+
 def _now_utc() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -424,6 +446,20 @@ class AgentLoop:
                     keywords_and_relevance=keywords_and_relevance,
                 )
 
+                # Fetch historical news from previous cycles for temporal reasoning
+                historical_entries = news_log.get_historical_context(
+                    ticker=ticker,
+                    max_entries=10,
+                    exclude_cycle=self._cycle,
+                    max_age_days=7,
+                )
+                historical_news_context = _format_historical_context(historical_entries)
+                if historical_entries:
+                    self._dashboard.log(
+                        f"  {ticker} → storico news: {len(historical_entries)} articoli pregressi (ultimi 7gg)",
+                        "info",
+                    )
+
                 # 4. PORTFOLIO HEALTH CHECK
                 pnl_pct = portfolio_result.data.get("pnl_pct", 0.0) if portfolio_result.ok else 0.0
                 mode = "conservative" if pnl_pct < -config.DRAWDOWN_THRESHOLD else "normal"
@@ -540,6 +576,7 @@ class AgentLoop:
                     strategy_id=self._current_strategy,
                     take_profit_hint=take_profit_hint,
                     correlation_section=correlation_section,
+                    historical_news_context=historical_news_context,
                 )
 
                 stale_tag = f"  -stale:{decision['stale_penalty']:.2f}" if decision["stale_penalty"] > 0 else ""

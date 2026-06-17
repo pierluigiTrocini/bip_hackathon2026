@@ -423,6 +423,68 @@ def compact(max_entries_per_ticker: int = 50) -> int:
         return 0
 
 
+def get_historical_context(
+    ticker: str,
+    max_entries: int = 10,
+    exclude_cycle: int | None = None,
+    max_age_days: int = 7,
+) -> list[dict]:
+    """
+    Return recent news entries for a ticker from ALL past cycles (cross-session).
+
+    Excludes:
+    - entries belonging to exclude_cycle (the current in-flight cycle)
+    - entries older than max_age_days
+    - compacted entries
+
+    Returns entries sorted by ts ascending (oldest first), capped at max_entries.
+    Never raises.
+    """
+    try:
+        if not os.path.exists(NEWS_LOG_PATH):
+            return []
+
+        cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+        matches: list[dict] = []
+
+        with open(NEWS_LOG_PATH, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                    if entry.get("ticker") != ticker:
+                        continue
+                    if entry.get("compacted", False):
+                        continue
+                    if exclude_cycle is not None and entry.get("cycle") == exclude_cycle:
+                        continue
+                    ts_str = entry.get("ts", "")
+                    try:
+                        ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                        if ts < cutoff:
+                            continue
+                    except Exception:
+                        continue
+                    matches.append({
+                        "ts":                 ts_str,
+                        "title":              entry.get("title", ""),
+                        "sentiment_score":    entry.get("sentiment_score", 0.0),
+                        "keywords":           entry.get("keywords", []),
+                        "decision_triggered": entry.get("decision_triggered"),
+                        "relevance_score":    entry.get("relevance_score", 0.5),
+                    })
+                except Exception:
+                    pass
+
+        matches.sort(key=lambda x: x["ts"])
+        return matches[-max_entries:] if len(matches) > max_entries else matches
+
+    except Exception:
+        return []
+
+
 def read_for_display(
     ticker: str,
     cycle: int,
