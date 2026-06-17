@@ -214,16 +214,17 @@ def main():
         telegram_notifier=telegram_notifier,
     )
 
-    # Wire Telegram callbacks into the loop's behavior/strategy machinery
-    def _tg_strategy_change(new_id: str) -> None:
-        loop._pending_strategy = new_id
+    # Wire Telegram callbacks into the loop's behavior/strategy machinery.
+    # Both return True when the request was accepted/queued, so the bot can
+    # confirm honestly instead of reporting optimistic success.
+    def _tg_strategy_change(new_id: str) -> bool:
+        loop._pending_strategy = new_id  # applied safely at the next cycle start
+        return True
 
-    def _tg_prompt_change(mode: str, text: str) -> None:
+    def _tg_prompt_change(mode: str, text: str) -> bool:
         current = behavior_manager.active_prompt
-        if mode == "a":
-            behavior_manager.request_change(f"{current}. {text}")
-        else:
-            behavior_manager.request_change(text)
+        new_prompt = f"{current}. {text}" if mode == "a" else text
+        return behavior_manager.request_change(new_prompt)
 
     telegram_notifier.on_strategy_change = _tg_strategy_change
     telegram_notifier.on_prompt_change   = _tg_prompt_change

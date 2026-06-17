@@ -89,5 +89,8 @@ PREFERENCE_EMOTION_WEIGHT:     float = float(os.getenv("PREFERENCE_EMOTION_WEIGH
 PREFERENCE_STYLE_WEIGHT:       float = float(os.getenv("PREFERENCE_STYLE_WEIGHT",      "0.4"))
 
 # Telegram Bot
-TELEGRAM_BOT_TOKEN: str  = os.getenv("TELEGRAM_BOT_TOKEN", "DISABLED")
-TELEGRAM_CHAT_ID:   str  = os.getenv("TELEGRAM_CHAT_ID",   "0")
+TELEGRAM_BOT_TOKEN:     str = os.getenv("TELEGRAM_BOT_TOKEN", "DISABLED")
+TELEGRAM_CHAT_ID:       str = os.getenv("TELEGRAM_CHAT_ID",   "0")
+# Persisted snapshot of the last completed cycle — lets /resume and /nerd answer
+# even before the first cycle of a fresh run completes (or right after a restart).
+TELEGRAM_SNAPSHOT_PATH: str = os.getenv("TELEGRAM_SNAPSHOT_PATH", "data/telegram_snapshot.json")

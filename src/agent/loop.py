@@ -891,6 +891,8 @@ class AgentLoop:
                     "unrealized_pnl_pct": unrealized_pnl_pct,
                     "avg_entry_price": avg_entry_price,
                     "disruptor_used": disruptor_articles,
+                    "rsi": tech_signals.rsi.value if tech_signals.rsi.valid else None,
+                    "bb_pct_b": tech_signals.bollinger.pct_b if tech_signals.bollinger.valid else None,
                 })
 
                 # 9. UPDATE DASHBOARD
