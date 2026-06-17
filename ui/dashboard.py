@@ -524,7 +524,7 @@ class Dashboard:
                 summary = a.get("summary", "")[:100]
                 ticker_tag = r["ticker"]
                 disruptor_lines.append(
-                    f"[bold dark_orange]⚡[/bold dark_orange] [bold]{ticker_tag}[/bold] "
+                    f"[bold]{ticker_tag}[/bold] "
                     f"[dim][{source}][/dim]  {title}"
                     + (f"\n   [dim]{summary}[/dim]" if summary else "")
                 )
@@ -555,7 +555,7 @@ class Dashboard:
             disruptor_body = "\n".join(disruptor_lines)
             _console.print(Panel(
                 disruptor_body,
-                title="[bold dark_orange]⚡ NOTIZIE DISRUPTOR — priorità alta[/bold dark_orange]",
+                title="[bold dark_orange]NOTIZIE DISRUPTOR — priorità alta[/bold dark_orange]",
                 border_style="dark_orange",
                 padding=(0, 2),
             ))
@@ -614,6 +614,35 @@ class Dashboard:
                 body,
                 title=title,
                 border_style=border,
+                padding=(1, 2),
+            )
+        )
+
+    def print_disruptor_articles(self, ticker: str, articles: list[dict]) -> None:
+        """Print breaking news from the disruptor immediately when detected mid-cycle."""
+        if not articles:
+            return
+        lines: list[str] = []
+        for i, art in enumerate(articles):
+            if i > 0:
+                lines.append("")
+            source = str(art.get("source", "unknown"))
+            title = str(art.get("title", ""))
+            summary = (str(art.get("summary", "") or "")).strip()
+            src_padded = source[:14].ljust(14)
+            title_truncated = title[:80] + ("…" if len(title) > 80 else "")
+            summary_truncated = summary[:120] + ("…" if len(summary) > 120 else "")
+            lines.append(
+                f"[bold dark_orange]{src_padded}[/bold dark_orange]  [white]{title_truncated}[/white]"
+            )
+            if summary_truncated:
+                lines.append(f"{'':16}[dim]{summary_truncated}[/dim]")
+
+        _console.print(
+            Panel(
+                "\n".join(lines),
+                title=f"[bold dark_orange]BREAKING — {ticker}[/bold dark_orange]  [dim]{len(articles)} nuove notizie prioritarie[/dim]",
+                border_style="dark_orange",
                 padding=(1, 2),
             )
         )

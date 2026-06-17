@@ -430,10 +430,7 @@ class AgentLoop:
                     for a in disruptor_articles:
                         a["_from_disruptor"] = True
                     if disruptor_articles:
-                        self._dashboard.log(
-                            f"  {ticker} → ⚡ disruptor: {len(disruptor_articles)} notizie prioritarie",
-                            "warn",
-                        )
+                        self._dashboard.print_disruptor_articles(ticker, disruptor_articles)
 
                 seen_titles: set[str] = {a.get("title", "").lower() for a in disruptor_articles}
                 combined_articles = list(disruptor_articles) + [
@@ -444,7 +441,7 @@ class AgentLoop:
 
                 self._dashboard.log(
                     f"  {ticker} → bars:{'ok' if bars_result.ok else 'err'}  "
-                    f"news:{len(regular_articles)} + ⚡{len(disruptor_articles)} disruptor = {article_count} tot  "
+                    f"news:{len(regular_articles)} + {len(disruptor_articles)} disruptor = {article_count} tot  "
                     f"portfolio:{'ok' if portfolio_result.ok else 'err'}",
                     "ok" if (bars_result.ok and portfolio_result.ok) else "warn",
                 )
@@ -490,7 +487,7 @@ class AgentLoop:
                 disruptor_context = ""
                 if disruptor_articles:
                     lines = [
-                        f"⚡ [{a.get('source', '?')}] {a.get('title', '')}:"
+                        f"[{a.get('source', '?')}] {a.get('title', '')}:"
                         f" {a.get('summary', '')[:120]}"
                         for a in disruptor_articles[:3]
                     ]
