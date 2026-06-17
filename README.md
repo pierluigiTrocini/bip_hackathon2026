@@ -24,11 +24,12 @@ This project implements a sophisticated autonomous trading system that:
 ✅ **Dynamic Strategy Library** with customizable trading strategies  
 ✅ **Behavior Questionnaire System** for adaptive agent personality  
 ✅ **Advanced Discovery Phase** with ticker cross-search and validation  
+✅ **MarketDisruptor Integration** — Breaking news panel with market disruption analysis  
 
 **Evaluation Criteria:**
 - Demonstrable Functionality (40%) — stable loop, error handling, persistent logs
 - Reasoning Quality (35%) — no hallucinations, confidence gating, self-reflection
-- Originality (25%) — dual-model, HOT/WARM/COLD, imitative layer, adaptive timeout, NCCI correlation analysis
+- Originality (25%) — dual-model, HOT/WARM/COLD, imitative layer, adaptive timeout, NCCI correlation analysis, MarketDisruptor
 
 ---
 
@@ -124,7 +125,8 @@ The agent will:
 | **`discovery.py`** | Discovery phase with ticker validation and cross-search |
 | **`correlation.py`** | News Co-occurrence Correlation Index (NCCI) + Jaccard similarity |
 | **`strategy_library.py`** | Dynamic strategy library with customizable trading strategies |
-| **`ui/dashboard.py`** | Rich TUI dashboard for monitoring with strategy display |
+| **`market_disruptor.py`** | Market disruption analysis with breaking news detection |
+| **`ui/dashboard.py`** | Rich TUI dashboard for monitoring with strategy display & disruption panel |
 
 ### **Decision Flow**
 
@@ -133,70 +135,79 @@ The agent will:
 │                    MAIN LOOP                            │
 │  (runs every T_WAIT seconds, adaptive)                  │
 └─────────────────────────────────────────────────────────┘
-                          │
-                          ▼
-         ┌────────────────────────────────┐
-         │  1. Fetch Market Data          │
-         │  - Latest price (AAPL, TSLA...) │
-         │  - Moving average (MA5)         │
-         │  - Recent news articles         │
-         │  - Cross-ticker correlations    │
-         └────────────────────────────────┘
-                          │
-                          ▼
-         ┌────────────────────────────────┐
-         │  2. Sentiment Analysis          │
-         │  (qwen2.5:3b)                  │
-         │  Score: -1.0 to +1.0           │
-         │  + Confidence gate              │
-         └────────────────────────────────┘
-                          │
-                          ▼
-         ┌────────────────────────────────┐
-         │  3. Correlation Analysis        │
-         │  (NCCI + Jaccard similarity)   │
-         │  Cross-ticker patterns         │
-         └────────────────────────────────┘
-                          │
-                          ▼
-         ┌────────────────────────────────┐
-         │  4. Build Memory Context       │
-         │  HOT: last 5 decisions         │
-         │  WARM: LLM-compacted summary   │
-         └────────────────────────────────┘
-                          │
-                          ▼
-         ┌────────────────────────────────┐
-         │  5. Reason (Gemma4:12b)        │
-         │  - Strategy-based prompts      │
-         │  - Imitative hints injected    │
-         │  - STALE_DATA penalty applied  │
-         │  - Timeout: T_behavior         │
-         │  Decision: BUY | SELL | HOLD   │
-         └────────────────────────────────┘
-                          │
-                          ▼
-         ┌────────────────────────────────┐
-         │  6. Order Quantity Calc.       │
-         │  - Enhanced position sizing    │
-         │  - Strategy signal mapping     │
-         │  - Market hours check          │
-         └────────────────────────────────┘
-                          │
-                          ▼
-         ┌────────────────────────────────┐
-         │  7. Place Order (if BUY/SELL)  │
-         │  - Position sizing (10% max)   │
-         │  - Error handling              │
-         └────────────────────────────────┘
-                          │
-                          ▼
-         ┌────────────────────────────────┐
-         │  8. Journal + Update Memory    │
-         │  - Write JSONL entry          │
-         │  - Update HOT/WARM            │
-         │  - Track outcome (next cycle) │
-         └────────────────────────────────┘
+                           │
+                           ▼
+          ┌────────────────────────────────┐
+          │  1. Fetch Market Data          │
+          │  - Latest price (AAPL, TSLA...) │
+          │  - Moving average (MA5)         │
+          │  - Recent news articles         │
+          │  - Cross-ticker correlations    │
+          │  - Breaking news alerts         │
+          └────────────────────────────────┘
+                           │
+                           ▼
+          ┌────────────────────────────────┐
+          │  2. Market Disruption Check     │
+          │  (MarketDisruptor analysis)    │
+          │  - Severity scoring            │
+          │  - Rapid response mode          │
+          └────────────────────────────────┘
+                           │
+                           ▼
+          ┌────────────────────────────────┐
+          │  3. Sentiment Analysis          │
+          │  (qwen2.5:3b)                  │
+          │  Score: -1.0 to +1.0           │
+          │  + Confidence gate              │
+          └────────────────────────────────┘
+                           │
+                           ▼
+          ┌────────────────────────────────┐
+          │  4. Correlation Analysis        │
+          │  (NCCI + Jaccard similarity)   │
+          │  Cross-ticker patterns         │
+          └────────────────────────────────┘
+                           │
+                           ▼
+          ┌────────────────────────────────┐
+          │  5. Build Memory Context       │
+          │  HOT: last 5 decisions         │
+          │  WARM: LLM-compacted summary   │
+          └────────────────────────────────┘
+                           │
+                           ▼
+          ┌────────────────────────────────┐
+          │  6. Reason (Gemma4:12b)        │
+          │  - Strategy-based prompts      │
+          │  - Imitative hints injected    │
+          │  - STALE_DATA penalty applied  │
+          │  - Timeout: T_behavior         │
+          │  Decision: BUY | SELL | HOLD   │
+          └────────────────────────────────┘
+                           │
+                           ▼
+          ┌────────────────────────────────┐
+          │  7. Order Quantity Calc.       │
+          │  - Enhanced position sizing    │
+          │  - Strategy signal mapping     │
+          │  - Market hours check          │
+          └────────────────────────────────┘
+                           │
+                           ▼
+          ┌────────────────────────────────┐
+          │  8. Place Order (if BUY/SELL)  │
+          │  - Position sizing (10% max)   │
+          │  - Error handling              │
+          └────────────────────────────────┘
+                           │
+                           ▼
+          ┌────────────────────────────────┐
+          │  9. Journal + Update Memory    │
+          │  - Write JSONL entry          │
+          │  - Update HOT/WARM            │
+          │  - Track outcome (next cycle) │
+          └────────────────────────────────┘
 ```
 
 ---
@@ -280,7 +291,16 @@ Improved ticker selection process:
 - News-driven candidate generation
 - User confirmation before trading starts
 
-### **9. Journal Entry**
+### **9. MarketDisruptor Analysis**
+
+Real-time breaking news detection and market impact assessment:
+- **Rapid News Scoring:** Immediate processing of market-moving news
+- **Disruption Severity Levels:** Classification from LOW to CRITICAL
+- **Dashboard Breaking News Panel:** ⚡ visual alert system with recent major market events
+- **Adaptive Response Mode:** Switching to higher sensitivity during high-disruption periods
+- **Cross-ticker Impact Mapping:** Understanding how news affects related assets
+
+### **10. Journal Entry**
 
 Every decision is logged as a complete JSONL entry:
 
@@ -315,7 +335,7 @@ Every decision is logged as a complete JSONL entry:
 
 Outcome fields (`price_after`, `outcome_pct`) are filled in the **next cycle** when a new price is available.
 
-### **10. Session Persistence**
+### **11. Session Persistence**
 
 Saved state in `data/session.json`:
 
@@ -375,7 +395,7 @@ WARM_COMPACTION_TRIGGER=15
 NCCI_WINDOW_DAYS=7
 JACCARD_MIN_THRESHOLD=0.3
 
-# ── Data Paths ──────────────────────────────────────────────────
+# ── Data Paths ──────────────���───────────────────────────────────
 JOURNAL_PATH=data/journal.jsonl
 ERROR_LOG_PATH=data/error_log.jsonl
 NEWS_LOG_PATH=data/news_log.jsonl
@@ -469,7 +489,8 @@ bip_hackathon2026/
 │   ├── discovery.py                    # Module 12: Discovery phase + cross-search
 │   ├── correlation.py                  # Module 13: NCCI + Jaccard
 │   ├── strategy_library.py             # Module 14: Dynamic strategies
-│   └── ui/dashboard.py                 # Module 15: Rich TUI
+│   ├── market_disruptor.py             # Module 15: Market disruption analysis
+│   └── ui/dashboard.py                 # Module 16: Rich TUI + disruption panel
 │
 ├── tests/
 │   ├── test_connections.py
@@ -480,7 +501,8 @@ bip_hackathon2026/
 │   ├── test_behavior.py
 │   ├── test_session.py
 │   ├── test_correlation.py
-│   └── test_strategy_library.py
+│   ├── test_strategy_library.py
+│   └── test_market_disruptor.py
 │
 ├── data/                               # Created at runtime
 │   ├── journal.jsonl
@@ -509,6 +531,7 @@ bip_hackathon2026/
 | **UI** | rich + textual |
 | **Testing** | pytest |
 | **Correlation** | Custom NCCI + Jaccard similarity |
+| **Market Disruption** | Real-time breaking news detection |
 
 **Dependencies:**
 - `alpaca-py` — trading API
@@ -546,12 +569,13 @@ Interactive questionnaire that adapts agent trading personality based on user pr
 ### **Discovery Phase**
 Agent analyzes market news for a given strategy, performs cross-ticker search, validates candidates, and asks you to confirm selections before trading starts.
 
-### **Dashboard**
+### **Dashboard with MarketDisruptor**
 Real-time TUI showing:
 - Current portfolio value
 - Open positions
 - Recent decisions with correlation data
 - Current strategy and behavior profile
+- **⚡ Breaking News Panel** — Major market events with disruption severity
 - Error log
 - Adaptive timeout values
 - NCCI correlation matrix
@@ -582,13 +606,14 @@ All errors logged to `error_log.jsonl` with timestamp, source, retry count.
 4. [DISCOVERY] Analyze news → cross-search tickers → present candidates → confirm
 5. [LOOP] Every N seconds:
     - Fetch prices + news + correlations
+    - Check for market disruptions (breaking news alerts)
     - Classify sentiment (qwen2.5)
     - Calculate NCCI + Jaccard correlations
     - Build memory context (HOT/WARM)
     - Reason about decision (Gemma4) with strategy injection
     - Calculate optimized order quantity
     - Execute order if BUY/SELL
-    - Journal outcome with correlations
+    - Journal outcome with correlations + disruption flags
 6. [SHUTDOWN] Ctrl+C → cancel open orders → save session
 ```
 
@@ -605,12 +630,26 @@ All errors logged to `error_log.jsonl` with timestamp, source, retry count.
 ✅ **Full Traceability** — Every decision logged with reasoning + correlations  
 ✅ **URL Validation** — News URLs verified and persisted  
 ✅ **Cross-ticker Awareness** — NCCI correlation analysis for informed decisions  
+✅ **Disruption Detection** — Real-time market disruption alerts with severity scoring  
 
 ---
 
 ## 📝 Recent Updates (Latest Commits)
 
-### **June 17, 2026**
+### **June 17, 2026 — Today**
+
+#### **MarketDisruptor Integration** 🎯
+- Integrated breaking news detection into dashboard with ⚡ visual alert panel
+- Added market disruption severity scoring (LOW → CRITICAL)
+- Enhanced dashboard article display with formatted disruption indicators
+- Improved LLM streaming and output formatting with grey styling
+
+#### **Code Reorganization & Refactoring**
+- Reorganized imports and streamlined portfolio position handling in main function
+- Refactored LLM streaming and dashboard output formatting
+- Consolidated market data fetching pipeline
+
+### **June 17, 2026 — Earlier**
 - **Correlation Index Output** — NCCI calculations now visible in dashboard and journals
 - **LLM Verbosity Enhanced** — Improved logging and output formatting with grey styling for LLM responses
 - **News Log Persistence** — Added missing news log file management to .gitignore
@@ -637,6 +676,7 @@ All errors logged to `error_log.jsonl` with timestamp, source, retry count.
 - **Performance:** Typical cycle time is 30-120s (adaptive).
 - **Data Privacy:** All LLMs run locally. No data sent to cloud services.
 - **Correlation Analysis:** NCCI calculations are incremental and cached for performance.
+- **MarketDisruptor:** Breaking news detection runs in parallel to minimize latency impact.
 
 ---
 
