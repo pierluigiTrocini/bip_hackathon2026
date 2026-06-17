@@ -44,7 +44,7 @@ def _action_badge(action: str) -> str:
 def _now_ts() -> str:
     local = datetime.now().strftime("%H:%M:%S")
     ny = datetime.now(tz=_NY_TZ).strftime("%H:%M:%S")
-    return f"{local} IT / {ny} NY"
+    return f"{local} IT / {ny} NYC"
 
 
 class Dashboard:
