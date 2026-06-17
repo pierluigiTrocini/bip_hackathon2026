@@ -3,7 +3,8 @@ BIP Hackathon 2026 — Trading Agent
 Entry point.
 
 Usage:
-    uv run python main.py
+    uv run python main.py        # silent loop (LLM output hidden during loop phase)
+    uv run python main.py -v     # verbose loop (LLM output visible, same as discovery phase)
 
 The agent initialises, asks for session resume or new prompt,
 then runs autonomously. Press Ctrl+C to stop gracefully.
@@ -20,6 +21,18 @@ logger = logging.getLogger(__name__)
 
 
 def main():
+    import argparse
+    _parser = argparse.ArgumentParser(description="BIP Trading Agent 2026")
+    _parser.add_argument(
+        "-v", "--verbose",
+        action="store_true",
+        help="Show LLM streaming output during the agent loop phase",
+    )
+    _args = _parser.parse_args()
+
+    from src.agent import llm_stream
+    llm_stream.LOOP_VERBOSE = _args.verbose
+
     from src.agent import config
     from src.agent.adaptive_timeout import AdaptiveTimeout
     from src.agent.tool_executor import ToolExecutor

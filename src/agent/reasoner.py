@@ -188,6 +188,7 @@ class Reasoner:
                 format=_DECISION_SCHEMA,
                 options={"temperature": 0.2, "num_predict": 300},
                 keep_alive="30s",
+                show_output=llm_stream.LOOP_VERBOSE,
             )
             # Strip any trailing content after the JSON object
             raw = raw.strip()

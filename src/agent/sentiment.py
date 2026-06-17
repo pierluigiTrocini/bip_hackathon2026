@@ -82,6 +82,7 @@ def analyse(
                 format=_SCHEMA,
                 options={"temperature": 0.0, "num_predict": 200},
                 keep_alive="30s",
+                show_output=llm_stream.LOOP_VERBOSE,
             )
             parsed = json.loads(raw)
             score = float(parsed.get("score", 0.0))

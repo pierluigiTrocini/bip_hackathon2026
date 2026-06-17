@@ -89,6 +89,7 @@ def extract_keywords_and_relevance(
             format=_KEYWORD_SCHEMA,
             options={"temperature": 0.0, "num_predict": 300},
             keep_alive="30s",
+            show_output=llm_stream.LOOP_VERBOSE,
         )
         raw = raw.strip()
 

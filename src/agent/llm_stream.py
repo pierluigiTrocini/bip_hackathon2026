@@ -2,17 +2,28 @@
 Shared LLM streaming utility.
 
 Every ollama.generate() call in the project routes through `generate()` here.
-It streams tokens in dark gray, then erases them with ANSI escape codes —
+It streams tokens in dark gray, then erases them after a 1-second pause —
 identical to the discovery-phase UX. A module-level lock prevents two
 concurrent callers from interleaving output on the terminal.
+
+Verbosity:
+  LOOP_VERBOSE=True  → show streaming output during the agent loop
+  LOOP_VERBOSE=False → loop-phase calls run silently (discovery always visible)
+  Set via main.py based on the -v / --verbose CLI flag.
 """
 import os
 import sys
 import threading
+import time
 
 import ollama
 
+# Controlled by main.py: True when -v flag is passed, False (default) otherwise.
+LOOP_VERBOSE: bool = False
+
 _print_lock = threading.Lock()
+_erase_done = threading.Event()
+_erase_done.set()  # initially "done" — nothing pending
 
 
 def generate(
@@ -21,24 +32,70 @@ def generate(
     format,
     options: dict,
     keep_alive: str = "30s",
+    show_output: bool = True,
 ) -> str:
     """
-    Drop-in replacement for ollama.generate() with gray streaming UX.
-    Returns the full response string (equivalent to resp.response).
-    Thread-safe: serialises terminal output via _print_lock.
+    Drop-in replacement for ollama.generate() with optional gray streaming UX.
+
+    show_output=True  → stream tokens in dark gray; erase after 1-second pause
+                        (pause is non-blocking: caller returns immediately after streaming)
+    show_output=False → run silently, no terminal output
+
+    Thread-safe: serialises terminal writes via _print_lock.
     """
     with _print_lock:
-        return _stream_and_erase(model, prompt, format, options, keep_alive)
+        # Wait for any pending deferred erase from the previous visible call.
+        _erase_done.wait(timeout=1.5)
+
+        if not show_output:
+            return _call_silent(model, prompt, format, options, keep_alive)
+
+        text, newline_count = _stream_tokens(model, prompt, format, options, keep_alive)
+
+    # Deferred erase: pause 1 second then erase, without blocking the caller.
+    _erase_done.clear()
+
+    def _deferred_erase() -> None:
+        time.sleep(1.0)
+        sys.stdout.write(f"\033[{newline_count}A\033[J")
+        sys.stdout.flush()
+        _erase_done.set()
+
+    threading.Thread(target=_deferred_erase, daemon=True).start()
+
+    return text
 
 
-def _stream_and_erase(
+# ── Internal helpers ──────────────────────────────────────────────────────────
+
+def _call_silent(model: str, prompt: str, format, options: dict, keep_alive: str) -> str:
+    """Run ollama.generate() consuming all chunks without writing to stdout."""
+    full_text = ""
+    for chunk in ollama.generate(
+        model=model,
+        prompt=prompt,
+        format=format,
+        options=options,
+        stream=True,
+        keep_alive=keep_alive,
+    ):
+        token = (
+            chunk.get("response", "")
+            if isinstance(chunk, dict)
+            else getattr(chunk, "response", "")
+        )
+        full_text += token
+    return full_text
+
+
+def _stream_tokens(
     model: str,
     prompt: str,
     format,
     options: dict,
     keep_alive: str,
-) -> str:
-    """Stream to stdout in gray, erase when done, return accumulated text."""
+) -> tuple[str, int]:
+    """Stream tokens to stdout in dark gray. Returns (full_text, newline_count)."""
     try:
         cols = os.get_terminal_size().columns
     except OSError:
@@ -64,7 +121,11 @@ def _stream_and_erase(
             stream=True,
             keep_alive=keep_alive,
         ):
-            token = chunk.get("response", "") if isinstance(chunk, dict) else getattr(chunk, "response", "")
+            token = (
+                chunk.get("response", "")
+                if isinstance(chunk, dict)
+                else getattr(chunk, "response", "")
+            )
             if not token:
                 continue
             full_text += token
@@ -87,7 +148,4 @@ def _stream_and_erase(
             newline_count += 1
         sys.stdout.flush()
 
-    sys.stdout.write(f"\033[{newline_count}A\033[J")
-    sys.stdout.flush()
-
-    return full_text
+    return full_text, newline_count
