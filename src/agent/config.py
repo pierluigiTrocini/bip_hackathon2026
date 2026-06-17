@@ -87,3 +87,7 @@ PREFERENCE_WAIT_HISTORY:       int   = int(os.getenv("PREFERENCE_WAIT_HISTORY", 
 PREFERENCE_CONFLICT_THRESHOLD: float = float(os.getenv("PREFERENCE_CONFLICT_THRESHOLD","0.05"))
 PREFERENCE_EMOTION_WEIGHT:     float = float(os.getenv("PREFERENCE_EMOTION_WEIGHT",    "0.3"))
 PREFERENCE_STYLE_WEIGHT:       float = float(os.getenv("PREFERENCE_STYLE_WEIGHT",      "0.4"))
+
+# Telegram Bot
+TELEGRAM_BOT_TOKEN: str  = os.getenv("TELEGRAM_BOT_TOKEN", "DISABLED")
+TELEGRAM_CHAT_ID:   str  = os.getenv("TELEGRAM_CHAT_ID",   "0")

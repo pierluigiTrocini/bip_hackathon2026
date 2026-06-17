@@ -62,6 +62,7 @@ class AgentLoop:
         disruptor: MarketDisruptor | None = None,
         position_manager: PositionManager | None = None,
         preference_engine: UserPreferenceEngine | None = None,
+        telegram_notifier=None,
     ) -> None:
         self._session = session
         self._at = adaptive_timeout
@@ -77,6 +78,7 @@ class AgentLoop:
         self._disruptor = disruptor
         self._pm = position_manager
         self._upe = preference_engine
+        self._telegram = telegram_notifier
         self._running = False
         self._cycle = session.get("cycle", 0)
         self._tickers: list[str] = tickers if tickers else config.TICKERS
@@ -808,6 +810,17 @@ class AgentLoop:
                     articles=display_articles,
                 )
 
+                if self._telegram:
+                    self._telegram.notify_action(
+                        ticker=ticker,
+                        action=action,
+                        confidence=decision["confidence"],
+                        reasoning=decision.get("reasoning", ""),
+                        caption=decision.get("caption", ""),
+                        articles=display_articles,
+                        disruptor_articles=disruptor_articles,
+                    )
+
                 # 8. RECORD
                 entry = journal_module.build_entry(
                     ts=_now_utc(),
@@ -942,6 +955,16 @@ class AgentLoop:
                 veto=veto_triggered,
                 strategy_name=strategy_name,
             )
+            if self._telegram:
+                self._telegram.notify_cycle_end(
+                    cycle=self._cycle,
+                    rows=cycle_rows,
+                    portfolio={"portfolio_value": portfolio_value, "cash": cash, "pnl_pct": pnl_pct},
+                    pnl_pct=pnl_pct,
+                    strategy_name=strategy_name,
+                    active_prompt=active_prompt,
+                    tickers=effective_tickers,
+                )
 
         if len(effective_tickers) >= 2:
             self._dashboard.print_correlation_matrix(

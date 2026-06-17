@@ -50,6 +50,7 @@ def main():
     from src.agent.user_preference_engine import UserPreferenceEngine
     from src.agent.loop import AgentLoop
     from ui.dashboard import Dashboard
+    from src.telegram_bot import TelegramNotifier
 
     dashboard = Dashboard()
     dashboard.log("BIP Trading Agent 2026 — starting…", "info")
@@ -108,6 +109,13 @@ def main():
     disruptor           = MarketDisruptor()
     position_manager    = PositionManager()
     preference_engine   = UserPreferenceEngine(session)
+    telegram_notifier   = TelegramNotifier(
+        token=config.TELEGRAM_BOT_TOKEN,
+        chat_id=config.TELEGRAM_CHAT_ID,
+        tool_executor=tool_executor,
+        disruptor=disruptor,
+        correlation_engine=correlation_engine,
+    )
     discovery_agent._session_id = session.get("session_id", "")
     dashboard.log(
         f"Models: {config.OLLAMA_REASONING_MODEL} + {config.OLLAMA_SENTIMENT_MODEL}",
@@ -203,7 +211,26 @@ def main():
         disruptor=disruptor,
         position_manager=position_manager,
         preference_engine=preference_engine,
+        telegram_notifier=telegram_notifier,
     )
+
+    # Wire Telegram callbacks into the loop's behavior/strategy machinery
+    def _tg_strategy_change(new_id: str) -> None:
+        loop._apply_strategy_switch(new_id)
+
+    def _tg_prompt_change(mode: str, text: str) -> None:
+        with behavior_manager._lock if hasattr(behavior_manager, "_lock") else __import__("contextlib").nullcontext():
+            current = behavior_manager.active_prompt
+            if mode == "a":
+                behavior_manager.request_change(f"{current}. {text}")
+            else:
+                behavior_manager.request_change(text)
+
+    telegram_notifier.on_strategy_change = _tg_strategy_change
+    telegram_notifier.on_prompt_change   = _tg_prompt_change
+    telegram_notifier.start()
+    if config.TELEGRAM_BOT_TOKEN != "DISABLED":
+        dashboard.log("Telegram bot started.", "ok")
 
     dashboard.log("Loop started. Ctrl+C to stop.", "ok")
     try:
@@ -213,6 +240,7 @@ def main():
     finally:
         loop.stop()
         disruptor.stop()
+        telegram_notifier.stop()
         dashboard.log("Cancelling open orders…", "warn")
         broker.cancel_all_orders()
         session_mgr.mark_paused(session)
