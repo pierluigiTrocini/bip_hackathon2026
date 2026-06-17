@@ -114,7 +114,7 @@ class Reasoner:
             "stale_penalty":   0.0,
             "reasoning":       f"Hold forced: {reason}",
             "accuracy_review": "N/A",
-            "caption":         f"Decisione forzata: {reason[:120]}",
+            "caption":         f"Forced decision: {reason[:120]}",
         }
 
     def decide(
@@ -136,8 +136,17 @@ class Reasoner:
         staleness_seconds: int,
         t_behavior: int,
         strategy_id: str = "contrarian",
-        take_profit_hint: str = "",
         correlation_section: str = "",
+        # F1: unified news context (replaces historical_news_context + disruptor_context)
+        news_context: str = "",
+        # F2: position manager context (replaces take_profit_hint)
+        position_context: str = "",
+        # F3: technical analysis signals
+        technical_signals: str = "",
+        # F4: user preference engine section
+        user_preferences_section: str = "",
+        # deprecated — kept for backward compatibility until loop.py is updated
+        take_profit_hint: str = "",
         historical_news_context: str = "",
         disruptor_context: str = "",
     ) -> dict:
@@ -149,49 +158,75 @@ class Reasoner:
         strategy = strategy_library.get(strategy_id)
         action_signal = _get_strategy_signal(strategy_id, sentiment_score, trend)
 
-        take_profit_section = (
-            f"=== POSITION P&L ===\n{take_profit_hint}\n\n"
-            if take_profit_hint else ""
-        )
+        # F1: build news block (new unified news_context takes precedence)
+        if news_context:
+            news_block = f"\n{news_context}\n\n"
+        elif historical_news_context or disruptor_context:
+            # legacy fallback
+            disruptor_section = (
+                f"=== BREAKING NEWS — DISRUPTOR (HIGH PRIORITY) ===\n{disruptor_context}\n\n"
+                if disruptor_context else ""
+            )
+            news_block = (
+                f"{disruptor_section}"
+                f"=== STORICO NEWS ({ticker} — ultimi cicli) ===\n"
+                f"{historical_news_context}\n\n"
+                if historical_news_context else disruptor_section
+            )
+        else:
+            news_block = ""
+
+        # F2: position context block (new takes precedence over take_profit_hint)
+        if position_context:
+            position_block = f"\n{position_context}\n\n"
+        elif take_profit_hint:
+            position_block = f"=== POSITION P&L ===\n{take_profit_hint}\n\n"
+        else:
+            position_block = ""
+
+        # F3: technical signals block
+        technical_block = f"\n{technical_signals}\n\n" if technical_signals else ""
+
+        # F4: user preferences block
+        prefs_block = f"\n{user_preferences_section}\n\n" if user_preferences_section else ""
 
         correlation_block = f"\n{correlation_section}\n\n" if correlation_section else ""
-        historical_block = (
-            f"=== STORICO NEWS ({ticker} — ultimi cicli) ===\n"
-            f"{historical_news_context}\n\n"
-            if historical_news_context else ""
-        )
-
-        disruptor_section = (
-            f"=== BREAKING NEWS — DISRUPTOR (ALTA PRIORITÀ) ===\n{disruptor_context}\n\n"
-            if disruptor_context else ""
-        )
 
         user_prompt = (
-            f"{disruptor_section}"
             f"=== STRATEGY: {strategy['name'].upper()} ===\n"
             f"{strategy['system_prompt']}\n\n"
             f"=== ACTION SIGNAL ===\n"
             f"{action_signal}\n"
             f"Sentiment: {sentiment_score:+.2f} ({sentiment_label}) | Trend: {trend}\n\n"
-            f"{take_profit_section}"
             f"=== AGENT BEHAVIOUR ===\n{active_prompt}\n\n"
             f"{imitative_hints}\n\n"
             f"=== MARKET DATA ({ticker}) ===\n"
             f"Price: ${price:.2f} (as of {price_timestamp})\n"
             f"MA5: ${ma5:.2f} | Trend: {trend}\n"
             f"Data stale: {stale} (staleness: {staleness_seconds}s)\n\n"
-            f"{historical_block}"
+            f"{news_block}"
+            f"{position_block}"
+            f"{technical_block}"
             f"=== PORTFOLIO ===\n"
             f"Cash: ${cash:,.2f} | Mode: {mode}\n"
             f"Positions: {positions_str}\n\n"
+            f"{prefs_block}"
             f"=== MEMORY ===\n{memory_context}\n"
             f"{correlation_block}"
             f"YOUR ACTION SIGNAL IS: {action_signal}\n"
             f"Follow the ACTION SIGNAL above. If you deviate, explain why in reasoning.\n"
-            f"The 'caption' field must be a single sentence in Italian (max 160 characters) "
+            # §8.3 system prompt additions
+            f"If RSI and Bollinger signals are provided, they reinforce or contradict the action "
+            f"signal — weight them accordingly.\n"
+            f"Honour stop-loss and take-profit levels: if position context shows a breach, "
+            f"override your action to SELL.\n"
+            f"Respect stated user preferences — they represent the user's actual instructions, "
+            f"not suggestions.\n"
+            f"Weight recent breaking news (HIGH PRIORITY) above historical articles.\n"
+            f"The 'caption' field must be a single sentence in English (max 160 characters) "
             f"explaining the decision to a non-expert user. Reference at least one concrete data point "
             f"(price vs MA, sentiment score, or a specific news topic). "
-            f"Do NOT start with the action word (e.g. do not start with 'Ho deciso di comprare').\n"
+            f"Do NOT start with the action word (e.g. do not start with 'I decided to buy').\n"
             f"Return valid JSON only."
         )
 

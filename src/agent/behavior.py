@@ -34,7 +34,7 @@ class BehaviorManager:
             self._change_requested = True
             return True
 
-    def apply_change(self, memory_manager, imitative_layer) -> bool:
+    def apply_change(self, memory_manager, imitative_layer, preference_engine=None) -> bool:
         t_behavior = self._at.t_behavior()
         done = threading.Event()
         exc_holder: list[Exception] = []
@@ -45,6 +45,10 @@ class BehaviorManager:
                 imitative_layer.reload()
                 self._active_prompt = self._pending_prompt
                 self._session["active_prompt"] = self._active_prompt
+                # F4: re-extract preferences from new prompt
+                if preference_engine is not None:
+                    preference_engine.extract_from_prompt(self._active_prompt, t_behavior)
+                    preference_engine.compute_derived_parameters()
             except Exception as exc:
                 exc_holder.append(exc)
             finally:

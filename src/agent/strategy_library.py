@@ -41,8 +41,8 @@ STRATEGIES: dict[str, dict] = {
     },
     "momentum": {
         "name": "Momentum",
-        "description": "Compra i titoli con forte accelerazione recente, esci quando rallentano",
-        "best_for": "Earning season, notizie forti, mercati in accelerazione",
+        "description": "Buy stocks with strong recent acceleration, exit when momentum slows",
+        "best_for": "Earnings season, strong news catalysts, accelerating markets",
         "system_prompt": (
             "You are a momentum trader who identifies stocks with the strongest recent price and sentiment acceleration. "
             "Core thesis: stocks in strong motion stay in motion — until the momentum fades, then they reverse fast. "
@@ -58,8 +58,8 @@ STRATEGIES: dict[str, dict] = {
     },
     "value": {
         "name": "Value",
-        "description": "Compra titoli sotto al valore medio, vendi quando tornano alla media",
-        "best_for": "Correzioni di mercato, titoli puniti ingiustamente da notizie temporanee",
+        "description": "Buy stocks below fair value, sell when they revert to the mean",
+        "best_for": "Market corrections, stocks unjustly punished by temporary news",
         "system_prompt": (
             "You are a value investor trained in the Graham-Buffett tradition, specializing in mean-reversion plays. "
             "Core thesis: price and intrinsic value diverge; patient, disciplined holding captures the gap. "
@@ -75,8 +75,8 @@ STRATEGIES: dict[str, dict] = {
     },
     "defensive": {
         "name": "Defensive",
-        "description": "Protezione del capitale: uscita rapida dalle perdite, acquisti solo ad alta certezza",
-        "best_for": "Alta incertezza, portafoglio in drawdown, mercato bear",
+        "description": "Capital protection: fast exit on losses, buy only with high confidence",
+        "best_for": "High uncertainty, portfolio in drawdown, bear market",
         "system_prompt": (
             "You are a defensive risk manager whose absolute priority is capital preservation above all returns. "
             "Core thesis: the first rule is don't lose money; the second rule is never forget rule one. "
@@ -92,8 +92,8 @@ STRATEGIES: dict[str, dict] = {
     },
     "scalping": {
         "name": "Scalping",
-        "description": "Profitti piccoli e frequenti, operatività rapida intra-ciclo",
-        "best_for": "Mercato aperto, alta liquidità, range trading",
+        "description": "Small frequent profits, rapid intra-cycle trading",
+        "best_for": "Open market, high liquidity, range-bound trading",
         "system_prompt": (
             "You are an expert scalp trader executing rapid, small-profit trades within tight time windows. "
             "Core thesis: many small disciplined wins compound into significant returns; never let a loss run. "
@@ -130,7 +130,7 @@ def recommend_switch(
     """
     Evaluate whether to switch strategy based on recent cycle metrics.
 
-    Returns (new_strategy_id, reason_in_italian) or (None, "").
+    Returns (new_strategy_id, reason) or (None, "").
 
     hold_rate   : fraction of last-N cycles ending in hold (0.0–1.0)
     pnl_trend   : P&L change over last-N cycles (negative = declining portfolio)
@@ -142,34 +142,34 @@ def recommend_switch(
     # Portfolio declining — go defensive before it gets worse
     if pnl_trend < -0.03 and current_id != "defensive":
         return "defensive", (
-            f"Il portafoglio ha perso il {abs(pnl_trend):.1%} negli ultimi cicli. "
-            f"La strategia {current_name} non sta proteggendo il capitale: "
-            f"passo a Defensive per limitare ulteriori perdite."
+            f"Portfolio lost {abs(pnl_trend):.1%} over recent cycles. "
+            f"{current_name} is not protecting capital: "
+            f"switching to Defensive to limit further losses."
         )
 
     # Strong consistent uptrend with positive sentiment → momentum play
     if avg_sentiment >= 0.30 and avg_trend == "up" and current_id not in ("momentum", "trend_following", "scalping"):
         return "momentum", (
-            f"Sentiment medio {avg_sentiment:+.2f} con uptrend costante negli ultimi cicli: "
-            f"il mercato è in forte momentum positivo. "
-            f"La strategia {current_name} non sfrutta questo ambiente — "
-            f"passo a Momentum per cavalcare il trend prima che finisca."
+            f"Average sentiment {avg_sentiment:+.2f} with sustained uptrend over recent cycles: "
+            f"market is in strong positive momentum. "
+            f"{current_name} is not exploiting this environment — "
+            f"switching to Momentum to ride the trend before it ends."
         )
 
     # Extreme and persistent fear → contrarian buying opportunity
     if avg_sentiment <= -0.35 and avg_trend in ("down", "flat") and current_id not in ("contrarian", "value"):
         return "contrarian", (
-            f"Sentiment medio {avg_sentiment:+.2f}: il mercato è in panico generalizzato da diversi cicli. "
-            f"La strategia {current_name} non è ottimizzata per sfruttare la capitolazione — "
-            f"passo a Contrarian per comprare durante il panico quando tutti vendono."
+            f"Average sentiment {avg_sentiment:+.2f}: market has been in widespread panic for several cycles. "
+            f"{current_name} is not optimised to exploit capitulation — "
+            f"switching to Contrarian to buy during the panic while everyone else sells."
         )
 
     # Too many holds with clear directional trend → follow the trend
     if hold_rate > 0.75 and avg_trend == "up" and current_id in ("contrarian", "value", "defensive"):
         return "trend_following", (
-            f"{hold_rate:.0%} dei cicli è finito in hold nonostante un uptrend costante. "
-            f"La strategia {current_name} cerca segnali estremi che non arrivano in questo mercato direzionale — "
-            f"passo a Trend Following per sfruttare il movimento in atto."
+            f"{hold_rate:.0%} of cycles ended in hold despite a sustained uptrend. "
+            f"{current_name} is waiting for extreme signals that aren't arriving in this directional market — "
+            f"switching to Trend Following to exploit the ongoing move."
         )
 
     return None, ""

@@ -485,6 +485,81 @@ def get_historical_context(
         return []
 
 
+def build_news_context_for_prompt(
+    ticker: str,
+    current_cycle: int,
+    history_cycles: int = 5,
+    min_relevance_historical: float = 0.50,
+    max_articles: int = 6,
+) -> str:
+    """Build the === NEWS CONTEXT === section for Gemma4's prompt. Never raises."""
+    try:
+        if not os.path.exists(NEWS_LOG_PATH):
+            return f"=== NEWS CONTEXT ({ticker}) ===\nNo news available for this cycle."
+
+        current: list[dict] = []
+        historical: list[dict] = []
+        current_titles: set[str] = set()
+
+        with open(NEWS_LOG_PATH, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except Exception:
+                    continue
+                if entry.get("ticker") != ticker:
+                    continue
+                if entry.get("compacted", False):
+                    continue
+                cycle = entry.get("cycle", -1)
+                title = entry.get("title", "").strip().replace("\n", " ").replace("\t", " ")
+                source = entry.get("source", "N/D") or "N/D"
+                rel = float(entry.get("relevance_score", 0.5))
+                if cycle == current_cycle:
+                    current.append({"title": title, "source": source, "rel": rel})
+                    current_titles.add(title.lower())
+                elif current_cycle - history_cycles <= cycle < current_cycle:
+                    if rel >= min_relevance_historical and title.lower() not in current_titles:
+                        historical.append({"title": title, "source": source, "rel": rel, "cycle": cycle})
+
+        current.sort(key=lambda x: x["rel"], reverse=True)
+        historical.sort(key=lambda x: x["rel"], reverse=True)
+
+        # Cap total: current gets priority, historical fills remaining slots
+        current = current[:max_articles]
+        max_hist = max(0, max_articles - len(current))
+        historical = historical[:max_hist]
+
+        header = f"=== NEWS CONTEXT ({ticker}) ==="
+        if not current and not historical:
+            return f"{header}\nNo news available for this cycle."
+
+        lines = [header]
+        if current:
+            lines.append("Current cycle:")
+            for a in current:
+                src = a["source"][:12].ljust(12)
+                lines.append(f"[{a['rel']:.2f}] {src} · {a['title']}")
+
+        if historical:
+            if current:
+                lines.append("")
+            lines.append(
+                f"Historical (last {history_cycles} cycles, score ≥ {min_relevance_historical}):"
+            )
+            for a in historical:
+                src = a["source"][:12].ljust(12)
+                lines.append(f"[{a['rel']:.2f}] {src} · {a['title']}  [cycle {a['cycle']}]")
+
+        return "\n".join(lines)
+
+    except Exception:
+        return f"=== NEWS CONTEXT ({ticker}) ===\nNo news available for this cycle."
+
+
 def read_for_display(
     ticker: str,
     cycle: int,

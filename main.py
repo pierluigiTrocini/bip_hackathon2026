@@ -46,22 +46,24 @@ def main():
     from src.agent.discovery import DiscoveryAgent
     from src.agent.correlation_engine import CorrelationEngine
     from src.agent.disruptor import MarketDisruptor
+    from src.agent.position_manager import PositionManager
+    from src.agent.user_preference_engine import UserPreferenceEngine
     from src.agent.loop import AgentLoop
     from ui.dashboard import Dashboard
 
     dashboard = Dashboard()
-    dashboard.log("BIP Trading Agent 2026 — avvio…", "info")
+    dashboard.log("BIP Trading Agent 2026 — starting…", "info")
 
     # Step 1: Detect previous session
     session_mgr = SessionManager()
-    dashboard.log("Ricerca sessione precedente…", "info")
+    dashboard.log("Looking for previous session…", "info")
     previous = session_mgr.detect_previous_session()
 
     resuming = False
     if previous:
         dashboard.log(
-            f"Sessione trovata: {str(previous.get('session_id','?'))[:8]}… "
-            f"(stato: {previous.get('status','?')})",
+            f"Session found: {str(previous.get('session_id','?'))[:8]}… "
+            f"(status: {previous.get('status','?')})",
             "warn",
         )
         summary = read_session_summary(previous["session_id"])
@@ -71,30 +73,30 @@ def main():
             session = session_mgr.resume(previous)
             prompt = session["active_prompt"]
             resuming = True
-            dashboard.log(f"Sessione ripresa. Prompt: {prompt[:60]}", "ok")
+            dashboard.log(f"Session resumed. Prompt: {prompt[:60]}", "ok")
         else:
-            prompt = input("\nInserisci il comportamento del nuovo agente: ").strip()
+            prompt = input("\nEnter the new agent behaviour: ").strip()
             session = session_mgr.create_new(prompt)
-            dashboard.log(f"Nuova sessione creata. Prompt: {prompt[:60]}", "ok")
+            dashboard.log(f"New session created. Prompt: {prompt[:60]}", "ok")
     else:
-        dashboard.log("Nessuna sessione precedente. Nuova sessione.", "info")
-        prompt = input("Inserisci il comportamento dell'agente (es. 'orientato a scelte green'): ").strip()
+        dashboard.log("No previous session found. Starting fresh.", "info")
+        prompt = input("Enter the agent behaviour (e.g. 'focus on green investments'): ").strip()
         session = session_mgr.create_new(prompt)
-        dashboard.log(f"Sessione creata: {str(session.get('session_id','?'))[:8]}…", "ok")
+        dashboard.log(f"Session created: {str(session.get('session_id','?'))[:8]}…", "ok")
 
     # Step 2: Calibrate adaptive timeout
     adaptive_timeout = AdaptiveTimeout()
-    dashboard.log("Calibrazione timeout adattivo (3 ping API + 3 ping Ollama)…", "info")
+    dashboard.log("Calibrating adaptive timeout (3 API pings + 3 Ollama pings)…", "info")
     adaptive_timeout.calibrate()
     s = adaptive_timeout.summary()
     dashboard.log(
-        f"Calibrazione completata → api:{s['api_avg']:.0f}ms  "
+        f"Calibration done → api:{s['api_avg']:.0f}ms  "
         f"ollama:{s['ollama_avg']:.0f}ms  t_wait:{s['t_wait']}s  t_behavior:{s['t_behavior']}s",
         "ok",
     )
 
     # Step 3: Initialise modules
-    dashboard.log("Inizializzazione moduli…", "info")
+    dashboard.log("Initialising modules…", "info")
     tool_executor       = ToolExecutor(adaptive_timeout)
     memory_manager      = MemoryManager()
     imitative_layer     = ImiativeLayer()
@@ -104,22 +106,31 @@ def main():
     discovery_agent     = DiscoveryAgent()
     correlation_engine  = CorrelationEngine()
     disruptor           = MarketDisruptor()
+    position_manager    = PositionManager()
+    preference_engine   = UserPreferenceEngine(session)
     discovery_agent._session_id = session.get("session_id", "")
     dashboard.log(
-        f"Modelli: {config.OLLAMA_REASONING_MODEL} + {config.OLLAMA_SENTIMENT_MODEL}",
+        f"Models: {config.OLLAMA_REASONING_MODEL} + {config.OLLAMA_SENTIMENT_MODEL}",
         "ok",
     )
+
+    # F4: extract user preferences from initial/resumed prompt
+    t_behavior_init = adaptive_timeout.t_behavior()
+    dashboard.log("Extracting user preferences from prompt…", "info")
+    preference_engine.extract_from_prompt(prompt, t_behavior_init)
+    preference_engine.compute_derived_parameters()
+    dashboard.log("User preferences extracted.", "ok")
 
     # Step 3b: Discovery phase (skip if resuming — use saved tickers)
     if resuming and session.get("tickers"):
         confirmed_tickers: list[str] = session["tickers"]
         dashboard.log(
-            f"Ripresa sessione — ticker dalla sessione precedente: {', '.join(confirmed_tickers)}",
+            f"Resuming session — tickers from previous session: {', '.join(confirmed_tickers)}",
             "ok",
         )
     else:
         dashboard.log("", "info")
-        dashboard.log("━━━ FASE DI DISCOVERY ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", "info")
+        dashboard.log("━━━ DISCOVERY PHASE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", "info")
 
         t_behavior = adaptive_timeout.t_behavior()
         discovery_prompt = prompt
@@ -127,7 +138,7 @@ def main():
 
         while True:
             dashboard.log(f"Prompt: \"{discovery_prompt[:100]}\"", "info")
-            dashboard.log("Analisi news di mercato e selezione ticker in corso…", "info")
+            dashboard.log("Analysing market news and selecting tickers…", "info")
 
             candidates = discovery_agent.discover(
                 discovery_prompt, tool_executor, t_behavior, dashboard
@@ -147,13 +158,13 @@ def main():
             discovery_prompt = result["new_prompt"]
             session["active_prompt"] = discovery_prompt
             dashboard.log("", "info")
-            dashboard.log("━━━ NUOVA DISCOVERY ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", "info")
+            dashboard.log("━━━ NEW DISCOVERY ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", "info")
 
         session["tickers"] = confirmed_tickers
         session_mgr.save(session)
 
         dashboard.log(
-            f"Ticker confermati per questa sessione: {', '.join(confirmed_tickers)}",
+            f"Confirmed tickers for this session: {', '.join(confirmed_tickers)}",
             "ok",
         )
         dashboard.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", "info")
@@ -161,14 +172,20 @@ def main():
 
     # Step 3c: Show portfolio positions on resume (discovery loop handles new sessions)
     if resuming:
-        dashboard.log("Recupero posizioni aperte nel portfolio…", "info")
+        dashboard.log("Fetching open portfolio positions…", "info")
         _portfolio_result = tool_executor.get_portfolio()
         _positions = _portfolio_result.data.get("positions", {}) if _portfolio_result.ok else {}
         dashboard.print_portfolio_positions(_positions)
+        # F2: restore position manager state from journal
+        position_manager.load_from_journal(
+            positions=_positions,
+            session_id=session.get("session_id", ""),
+            journal_path=config.JOURNAL_PATH,
+        )
 
     # Step 4: Start loop
     disruptor.start(confirmed_tickers, session.get("session_id", ""))
-    dashboard.log("MarketDisruptor avviato in background.", "ok")
+    dashboard.log("MarketDisruptor started in background.", "ok")
 
     loop = AgentLoop(
         session=session,
@@ -184,20 +201,22 @@ def main():
         correlation_engine=correlation_engine,
         tickers=confirmed_tickers,
         disruptor=disruptor,
+        position_manager=position_manager,
+        preference_engine=preference_engine,
     )
 
-    dashboard.log("Loop avviato. Ctrl+C per fermare.", "ok")
+    dashboard.log("Loop started. Ctrl+C to stop.", "ok")
     try:
         loop.start()
     except KeyboardInterrupt:
-        dashboard.log("Shutdown richiesto dall'utente (Ctrl+C).", "warn")
+        dashboard.log("Shutdown requested by user (Ctrl+C).", "warn")
     finally:
         loop.stop()
         disruptor.stop()
-        dashboard.log("Cancellazione ordini aperti…", "warn")
+        dashboard.log("Cancelling open orders…", "warn")
         broker.cancel_all_orders()
         session_mgr.mark_paused(session)
-        dashboard.log("Sessione sospesa.", "ok")
+        dashboard.log("Session paused.", "ok")
         summary = read_session_summary(session["session_id"])
         dashboard.print_resoconto(summary)
         dashboard.print_shutdown_message()

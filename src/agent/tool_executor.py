@@ -122,7 +122,7 @@ class ToolExecutor:
         except Exception as exc:
             return self._cache_fallback(ticker, "price", str(exc))
 
-    def get_bars(self, ticker: str, limit: int = 5) -> ToolResult:
+    def get_bars(self, ticker: str, limit: int = 20) -> ToolResult:
         if ticker in self._blacklisted:
             return self._cache_fallback(ticker, "bars", f"{ticker} is blacklisted")
         try:
@@ -135,13 +135,15 @@ class ToolExecutor:
                 bars_resp = client.get_stock_bars(req)
                 bars = bars_resp[ticker] if ticker in bars_resp else []
                 closes = [float(b.close) for b in bars]
+                volumes = [int(b.volume) for b in bars]
                 ma = sum(closes) / len(closes) if closes else 0.0
                 trend = "up" if len(closes) >= 2 and closes[-1] > closes[0] else "down" if len(closes) >= 2 else "flat"
                 return ToolResult(ok=True, data={
-                    "ticker": ticker,
-                    "closes": closes,
-                    "ma": round(ma, 2),
-                    "trend": trend,
+                    "ticker":  ticker,
+                    "closes":  closes,
+                    "volumes": volumes,
+                    "ma":      round(ma, 2),
+                    "trend":   trend,
                 })
             result = self._with_retry(fetch, ticker)
             self._store_cache(ticker, "bars", result)

@@ -103,7 +103,7 @@ class Dashboard:
 
         portfolio_table = Table(show_header=False, box=None, padding=(0, 1))
         portfolio_table.add_row("Cash:", f"${portfolio.get('cash', 0):,.2f}")
-        portfolio_table.add_row("Valore:", f"${portfolio.get('portfolio_value', 0):,.2f}")
+        portfolio_table.add_row("Value:", f"${portfolio.get('portfolio_value', 0):,.2f}")
         portfolio_table.add_row(
             "P&L:",
             f"[{pnl_color}]{pnl_pct:+.2%} {pnl_arrow} [{mode_str}][/{pnl_color}]",
@@ -146,25 +146,25 @@ class Dashboard:
         bar = "[dark_orange]" + "█" * filled + "[/dark_orange]" + "[dim]" + "░" * (20 - filled) + "[/dim]"
         countdown_line = (
             f"[bold dark_orange]⏳ {countdown}s[/bold dark_orange]  {bar}  │  "
-            "[bold white]INVIO[/bold white] conferma · "
-            "[dark_orange]a[/dark_orange] istruzione · "
+            "[bold white]ENTER[/bold white] confirm · "
+            "[dark_orange]a[/dark_orange] instruction · "
             "[dark_orange]p[/dark_orange] prompt · "
-            "[dark_orange]q[/dark_orange] questionario · "
-            "[dark_orange]s[/dark_orange] strategia · "
+            "[dark_orange]q[/dark_orange] questionnaire · "
+            "[dark_orange]s[/dark_orange] strategy · "
             "[dark_orange]m[/dark_orange] override"
         )
 
         header = (
             f"[bold white]BIP Trading Agent[/bold white]  │  "
-            f"[dim]Sessione: {str(session_id)[:8]}…  Ciclo: {cycle}[/dim]  │  "
+            f"[dim]Session: {str(session_id)[:8]}…  Cycle: {cycle}[/dim]  │  "
             f"[bold dark_orange]{strategy}[/bold dark_orange]  │  [dim]{_now_ts()}[/dim]"
         )
 
         body = (
             f"[bold white]PORTFOLIO[/bold white]\n{_table_str(portfolio_table)}\n\n"
             f"[dim]T_wait:{t_wait}s  T_behavior:{t_behavior}s[/dim]\n\n"
-            f"[bold white]PROPOSTA AGENTE[/bold white]\n{proposals_text}\n\n"
-            f"[bold white]JOURNAL (ultimi 5)[/bold white]\n{journal_text}\n\n"
+            f"[bold white]AGENT PROPOSAL[/bold white]\n{proposals_text}\n\n"
+            f"[bold white]JOURNAL (last 5)[/bold white]\n{journal_text}\n\n"
             f"{countdown_line}\n> "
         )
 
@@ -221,7 +221,7 @@ class Dashboard:
         if user_input == "s":
             return {"source": "strategy_select", "data": {}}
         if user_input == "m":
-            _console.print("[bold yellow]Override manuale[/bold yellow] — inserisci: TICKER SIDE QTY (es: AAPL buy 5) [dim](30s)[/dim]")
+            _console.print("[bold yellow]Manual override[/bold yellow] — enter: TICKER SIDE QTY (e.g. AAPL buy 5) [dim](30s)[/dim]")
             _override_buf: list[str] = []
             def _get_override():
                 try:
@@ -252,12 +252,12 @@ class Dashboard:
         """Show an auto-switch recommendation and ask for confirmation. Returns True if accepted."""
         _console.print(
             Panel(
-                f"[bold yellow]L'agente suggerisce di cambiare strategia:[/bold yellow]\n\n"
+                f"[bold yellow]The agent suggests changing strategy:[/bold yellow]\n\n"
                 f"[dim]{reason}[/dim]\n\n"
-                f"Nuova strategia: [bold cyan]{new_name}[/bold cyan]\n\n"
-                f"[bold]s[/bold] accetta  ·  [bold]n[/bold] rifiuta  ·  "
-                f"timeout {timeout_seconds}s → auto-accetta",
-                title="[bold yellow]◆ CAMBIO STRATEGIA AUTOMATICO[/bold yellow]",
+                f"New strategy: [bold cyan]{new_name}[/bold cyan]\n\n"
+                f"[bold]s[/bold] accept  ·  [bold]n[/bold] reject  ·  "
+                f"timeout {timeout_seconds}s → auto-accept",
+                title="[bold yellow]◆ AUTO STRATEGY SWITCH[/bold yellow]",
                 border_style="yellow",
             )
         )
@@ -275,9 +275,9 @@ class Dashboard:
 
         answer = _result[0] if _result else ""
         if answer == "n":
-            _console.print("[dim]Cambio rifiutato — strategia invariata.[/dim]")
+            _console.print("[dim]Change rejected — strategy unchanged.[/dim]")
             return False
-        _console.print(f"[green]✓ Strategia aggiornata a: {new_name}[/green]")
+        _console.print(f"[green]✓ Strategy updated to: {new_name}[/green]")
         return True
 
     def print_discovery_candidates(self, candidates: list[dict]) -> None:
@@ -289,9 +289,9 @@ class Dashboard:
         )
         table.add_column("#", justify="right", min_width=2, style="dim")
         table.add_column("Ticker", style="bold", min_width=8)
-        table.add_column("Stato", min_width=10)
+        table.add_column("Status", min_width=10)
         table.add_column("Conf", justify="right", min_width=5)
-        table.add_column("Motivazione", min_width=55, no_wrap=False)
+        table.add_column("Rationale", min_width=55, no_wrap=False)
 
         valid_count = 0
         invalid_count = 0
@@ -309,11 +309,11 @@ class Dashboard:
                     if remapped
                     else f"[green]{c['ticker']}[/green]"
                 )
-                status_str = "[green]✓ valido[/green]"
+                status_str = "[green]✓ valid[/green]"
             else:
                 invalid_count += 1
                 ticker_str = f"[dark_orange]{c['ticker']}[/dark_orange]"
-                status_str = "[dark_orange]✗ non trovato[/dark_orange]"
+                status_str = "[dark_orange]✗ not found[/dark_orange]"
                 conf_col = "dark_orange"
 
             table.add_row(
@@ -325,9 +325,9 @@ class Dashboard:
             )
 
         subtitle = (
-            f"[dim]Basato sul tuo prompt e sulle news di mercato — "
-            f"[green]{valid_count} validi[/green]"
-            + (f"  [dark_orange]{invalid_count} non trovati su Alpaca[/dark_orange]" if invalid_count else "")
+            f"[dim]Based on your prompt and market news — "
+            f"[green]{valid_count} valid[/green]"
+            + (f"  [dark_orange]{invalid_count} not found on Alpaca[/dark_orange]" if invalid_count else "")
             + "[/dim]"
         )
         _console.print(
@@ -344,8 +344,8 @@ class Dashboard:
         if not positions:
             _console.print(
                 Panel(
-                    "[dim]Nessuna posizione aperta nel portfolio.[/dim]",
-                    title="[bold cyan]◆ PORTFOLIO — Posizioni aperte[/bold cyan]",
+                    "[dim]No open positions in portfolio.[/dim]",
+                    title="[bold cyan]◆ PORTFOLIO — Open positions[/bold cyan]",
                     border_style="cyan",
                     padding=(0, 2),
                 )
@@ -359,9 +359,9 @@ class Dashboard:
             padding=(0, 2),
         )
         table.add_column("Ticker", style="bold", min_width=8)
-        table.add_column("Qtà", justify="right", min_width=6)
-        table.add_column("Prezzo medio", justify="right", min_width=14)
-        table.add_column("Valore mercato", justify="right", min_width=16)
+        table.add_column("Qty", justify="right", min_width=6)
+        table.add_column("Avg Price", justify="right", min_width=14)
+        table.add_column("Market Value", justify="right", min_width=16)
 
         total_value = 0.0
         for ticker, pos in sorted(positions.items()):
@@ -376,11 +376,11 @@ class Dashboard:
                 f"${mktval:,.2f}",
             )
 
-        subtitle = f"[dim]Valore totale posizioni: [bold]${total_value:,.2f}[/bold][/dim]"
+        subtitle = f"[dim]Total position value: [bold]${total_value:,.2f}[/bold][/dim]"
         _console.print(
             Panel(
                 table,
-                title="[bold cyan]◆ PORTFOLIO — Posizioni aperte[/bold cyan]",
+                title="[bold cyan]◆ PORTFOLIO — Open positions[/bold cyan]",
                 subtitle=subtitle,
                 border_style="cyan",
                 padding=(1, 2),
@@ -395,12 +395,12 @@ class Dashboard:
             bar_filled = remaining * 20 // max(timeout_seconds, 1)
             bar = "█" * bar_filled + "░" * (20 - bar_filled)
             return Panel(
-                f"[bold]Ticker proposti:[/bold] [cyan]{default_str}[/cyan]\n\n"
+                f"[bold]Proposed tickers:[/bold] [cyan]{default_str}[/cyan]\n\n"
                 f"⏳ {remaining}s [{bar}] │ "
-                "[bold]INVIO[/bold] conferma · "
-                "[bold cyan]testo+INVIO[/bold cyan] nuovo prompt · "
-                "[dim]timeout = auto-conferma[/dim]\n> ",
-                title="[bold magenta]Conferma Discovery[/bold magenta]",
+                "[bold]ENTER[/bold] confirm · "
+                "[bold cyan]text+ENTER[/bold cyan] new prompt · "
+                "[dim]timeout = auto-confirm[/dim]\n> ",
+                title="[bold magenta]Confirm Discovery[/bold magenta]",
                 border_style="magenta",
             )
 
@@ -435,15 +435,15 @@ class Dashboard:
             pool.shutdown(wait=False)
 
         if user_input is None:
-            _console.print(f"[green]✓ Auto-confermati (timeout):[/green] {default_str}")
+            _console.print(f"[green]✓ Auto-confirmed (timeout):[/green] {default_str}")
             return {"action": "confirm", "tickers": default}
 
         raw = user_input.strip()
         if not raw:
-            _console.print(f"[green]✓ Confermati:[/green] {default_str}")
+            _console.print(f"[green]✓ Confirmed:[/green] {default_str}")
             return {"action": "confirm", "tickers": default}
 
-        _console.print(f"[yellow]Nuovo prompt ricevuto — riavvio discovery:[/yellow] {raw}")
+        _console.print(f"[yellow]New prompt received — restarting discovery:[/yellow] {raw}")
         return {"action": "reprompt", "new_prompt": raw}
 
     def print_cycle_summary(
@@ -465,14 +465,14 @@ class Dashboard:
             padding=(0, 1),
         )
         table.add_column("Ticker", style="bold white", min_width=6)
-        table.add_column("Prezzo", justify="right", min_width=10)
+        table.add_column("Price", justify="right", min_width=10)
         table.add_column("Trend", min_width=5)
         table.add_column("Sentiment", min_width=16)
-        table.add_column("Decisione", min_width=14)
+        table.add_column("Decision", min_width=14)
         table.add_column("Conf", justify="right", min_width=5)
         table.add_column("P&L pos.", justify="right", min_width=9)
-        table.add_column("Ordine", min_width=8)
-        table.add_column("Perché", min_width=45, no_wrap=False)
+        table.add_column("Order", min_width=8)
+        table.add_column("Why", min_width=45, no_wrap=False)
 
         trend_symbol = {"up": "[bright_green]↑[/bright_green]", "down": "[bright_red]↓[/bright_red]", "flat": "[dim]→[/dim]"}
         sentiment_color = {
@@ -491,7 +491,7 @@ class Dashboard:
             sent_label = r["sentiment_label"]
             sent_score = r["sentiment_score"]
             sent_col = sentiment_color.get(sent_label, "white")
-            order_str = "[bright_green]✓ inviato[/bright_green]" if r.get("order_id") else "[dim]—[/dim]"
+            order_str = "[bright_green]✓ sent[/bright_green]" if r.get("order_id") else "[dim]—[/dim]"
 
             upnl = r.get("unrealized_pnl_pct")
             if upnl is not None:
@@ -538,13 +538,13 @@ class Dashboard:
             f"Cash: [white]${cash:,.2f}[/white]  "
             f"P&L: [{pnl_col}]{pnl_pct:+.2%}[/{pnl_col}]  "
             f"{mode_str}{strat_str}{veto_str}\n"
-            f"[dim]Prossimo ciclo tra [/dim][bold dark_orange]{wait_seconds}s[/bold dark_orange][dim] — INVIO · a · p · q · s · m[/dim]"
+            f"[dim]Next cycle in [/dim][bold dark_orange]{wait_seconds}s[/bold dark_orange][dim] — ENTER · a · p · q · s · m[/dim]"
         )
 
         _console.print(
             Panel(
-                table if rows else Text("Nessun ticker elaborato in questo ciclo.", style="dim"),
-                title=f"[bold white]◆ CICLO {cycle} — RIEPILOGO[/bold white]",
+                table if rows else Text("No tickers processed this cycle.", style="dim"),
+                title=f"[bold white]◆ CYCLE {cycle} — SUMMARY[/bold white]",
                 subtitle=footer,
                 border_style="white",
                 padding=(1, 2),
@@ -555,7 +555,7 @@ class Dashboard:
             disruptor_body = "\n".join(disruptor_lines)
             _console.print(Panel(
                 disruptor_body,
-                title="[bold dark_orange]NOTIZIE DISRUPTOR — priorità alta[/bold dark_orange]",
+                title="[bold dark_orange]DISRUPTOR NEWS — high priority[/bold dark_orange]",
                 border_style="dark_orange",
                 padding=(0, 2),
             ))
@@ -588,11 +588,11 @@ class Dashboard:
             wrapped = caption[:160]
             lines.append(f"[white]💬 {wrapped}[/white]")
         else:
-            lines.append("[dim]Nessuna spiegazione disponibile.[/dim]")
+            lines.append("[dim]No explanation available.[/dim]")
 
         if articles:
             lines.append("")
-            lines.append("[bold white]Notizie a supporto:[/bold white]")
+            lines.append("[bold white]Supporting news:[/bold white]")
             for i, art in enumerate(articles):
                 if i > 0:
                     lines.append("")
@@ -606,7 +606,7 @@ class Dashboard:
                     lines.append(f"{'':14}[cyan]{url}[/cyan]")
         else:
             lines.append("")
-            lines.append("[dim]Nessuna notizia disponibile per questo ciclo.[/dim]")
+            lines.append("[dim]No news available for this cycle.[/dim]")
 
         body = "\n".join(lines)
         _console.print(
@@ -641,11 +641,93 @@ class Dashboard:
         _console.print(
             Panel(
                 "\n".join(lines),
-                title=f"[bold dark_orange]BREAKING — {ticker}[/bold dark_orange]  [dim]{len(articles)} nuove notizie prioritarie[/dim]",
+                title=f"[bold dark_orange]BREAKING — {ticker}[/bold dark_orange]  [dim]{len(articles)} new priority items[/dim]",
                 border_style="dark_orange",
                 padding=(1, 2),
             )
         )
+
+    def print_stop_loss_proposal(
+        self,
+        ticker: str,
+        current_price: float,
+        entry_price: float,
+        pnl_pct: float,
+        qty: int,
+        explanation: str,
+        timeout_seconds: int = 20,
+    ) -> dict:
+        """Ask the user to confirm a stop-loss sell. Returns {"confirmed": bool, "timeout": bool}.
+        Timeout auto-confirms (sells) to protect capital."""
+        pnl_col = "bright_green" if pnl_pct >= 0 else "bright_red"
+        body = (
+            f"[bold white]{ticker}[/bold white]  {_action_badge('sell')}  "
+            f"[dim]{qty} shares[/dim]\n\n"
+            f"Entry price:     [white]${entry_price:.2f}[/white]\n"
+            f"Current price:   [white]${current_price:.2f}[/white]\n"
+            f"Unrealised P&L:  [{pnl_col}]{pnl_pct:+.2%}[/{pnl_col}]\n\n"
+            f"[dim]{explanation}[/dim]\n\n"
+            f"[bold]ENTER[/bold] / [bold]s[/bold] confirm sell  ·  "
+            f"[bold]n[/bold] cancel  ·  "
+            f"timeout {timeout_seconds}s → [bold red]auto-sell[/bold red]"
+        )
+        _console.print(Panel(
+            body,
+            title="[bold red]STOP-LOSS — Confirmation required[/bold red]",
+            border_style="red",
+            padding=(1, 2),
+        ))
+
+        _result: list[str] = []
+        def _get_answer():
+            try:
+                _result.append(input("> ").strip().lower())
+            except (EOFError, KeyboardInterrupt):
+                pass
+
+        t = threading.Thread(target=_get_answer, daemon=True)
+        t.start()
+        t.join(timeout=timeout_seconds)
+
+        if not _result:
+            _console.print(f"[bold red]Stop-loss auto-confirmed (timeout) — selling {ticker}[/bold red]")
+            return {"confirmed": True, "timeout": True}
+        answer = _result[0]
+        if answer in ("n", "no"):
+            _console.print(f"[dim]Stop-loss cancelled for {ticker}.[/dim]")
+            return {"confirmed": False, "timeout": False}
+        _console.print(f"[bold red]Stop-loss confirmed — selling {ticker}[/bold red]")
+        return {"confirmed": True, "timeout": False}
+
+    def print_preference_conflict(self, ticker: str, conflict: dict) -> None:
+        """Print a user preference conflict alert."""
+        if not conflict:
+            return
+        conflict_type = conflict.get("type", "unknown")
+        description = conflict.get("description", "")
+        modified_action = conflict.get("modified_action", "")
+        type_labels = {
+            "buying_while_losing": "Buying while losing with low-risk profile",
+            "excluded_sector":     "Sector excluded by user preferences",
+            "emotional_vs_sentiment": "User emotion conflicts with market sentiment",
+            "risk_vs_conservative_mode": "High-risk preference vs conservative mode",
+        }
+        label = type_labels.get(conflict_type, conflict_type)
+        mod_str = (
+            f"\n[dim]Action modified → [bold white]{modified_action.upper()}[/bold white][/dim]"
+            if modified_action else ""
+        )
+        body = (
+            f"[bold white]{ticker}[/bold white]  [yellow]{label}[/yellow]\n\n"
+            f"[dim]{description}[/dim]"
+            f"{mod_str}"
+        )
+        _console.print(Panel(
+            body,
+            title="[bold yellow]PREFERENCE CONFLICT[/bold yellow]",
+            border_style="yellow",
+            padding=(1, 2),
+        ))
 
     def print_correlation_matrix(self, tickers: list[str], engine) -> None:
         """
@@ -672,8 +754,8 @@ class Dashboard:
         if not has_data:
             _console.print(
                 Panel(
-                    "[dim]Correlazioni non ancora disponibili — news insufficienti per calcolare NCCI.[/dim]",
-                    title=f"[bold dim]◆ NCCI — Ciclo {cycle}[/bold dim]",
+                    "[dim]Correlations not yet available — insufficient news to compute NCCI.[/dim]",
+                    title=f"[bold dim]◆ NCCI — Cycle {cycle}[/bold dim]",
                     border_style="dim",
                     padding=(0, 2),
                 )
@@ -709,16 +791,16 @@ class Dashboard:
 
         subtitle = (
             f"[dim]"
-            f"[bold red]rosso[/bold red] ≥ 0.50  "
-            f"[yellow]giallo[/yellow] ≥ 0.30  "
-            f"bianco ≥ {config.NCCI_THRESHOLD_DISPLAY:.2f}  "
-            f"[dim]grigio[/dim] = trascurabile"
+            f"[bold red]red[/bold red] ≥ 0.50  "
+            f"[yellow]yellow[/yellow] ≥ 0.30  "
+            f"white ≥ {config.NCCI_THRESHOLD_DISPLAY:.2f}  "
+            f"[dim]grey[/dim] = negligible"
             f"[/dim]"
         )
         _console.print(
             Panel(
                 table,
-                title=f"[bold dim]◆ NCCI — Correlazioni ticker — Ciclo {cycle}[/bold dim]",
+                title=f"[bold dim]◆ NCCI — Ticker correlations — Cycle {cycle}[/bold dim]",
                 subtitle=subtitle,
                 border_style="dim",
                 padding=(1, 2),
@@ -732,20 +814,20 @@ class Dashboard:
         decisions = summary.get("decisions", {})
         rows = [
             ("ID", f"{str(summary.get('session_id',''))[:8]}…"),
-            ("Cicli", str(summary.get("cycles", 0))),
-            ("Ordini", str(summary.get("orders_placed", 0))),
+            ("Cycles", str(summary.get("cycles", 0))),
+            ("Orders", str(summary.get("orders_placed", 0))),
             ("P&L", pnl_str),
-            ("Decisioni autonome", str(summary.get("autonomous_decisions", 0))),
-            ("Errori loggati", str(summary.get("errors", 0))),
+            ("Autonomous decisions", str(summary.get("autonomous_decisions", 0))),
+            ("Logged errors", str(summary.get("errors", 0))),
             ("Buy/Sell/Hold", f"{decisions.get('buy',0)}/{decisions.get('sell',0)}/{decisions.get('hold',0)}"),
         ]
         for label, value in rows:
             table.add_row(f"[bold]{label}:[/bold]", value)
-        _console.print(Panel(table, title="[yellow]RESOCONTO SESSIONE[/yellow]", border_style="yellow"))
+        _console.print(Panel(table, title="[yellow]SESSION SUMMARY[/yellow]", border_style="yellow"))
 
     def print_shutdown_message(self) -> None:
         _console.print(Panel(
-            "[bold green]Agente fermato. Sessione salvata.[/bold green]",
+            "[bold green]Agent stopped. Session saved.[/bold green]",
             title="[red]SHUTDOWN[/red]",
             border_style="red",
         ))

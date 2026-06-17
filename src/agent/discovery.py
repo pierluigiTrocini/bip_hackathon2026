@@ -471,8 +471,8 @@ class DiscoveryAgent:
 
             need = _MAX_CANDIDATES - len(validated)
             _log(
-                f"  [discovery] Validazione round {round_num}/{max_rounds} — "
-                f"{len(pending)} candidati da verificare, {need} ancora necessari…",
+                f"  [discovery] Validation round {round_num}/{max_rounds} — "
+                f"{len(pending)} candidates to check, {need} still needed…",
                 "info",
             )
 
@@ -491,8 +491,8 @@ class DiscoveryAgent:
                 if resolved:
                     seen.add(ticker)
                     seen.add(resolved)
-                    remap_note = f" (rimappato da {ticker})" if remapped else ""
-                    _log(f"  [discovery]   ✓ {resolved}{remap_note} — validato su Alpaca", "ok")
+                    remap_note = f" (remapped from {ticker})" if remapped else ""
+                    _log(f"  [discovery]   ✓ {resolved}{remap_note} — validated on Alpaca", "ok")
                     validated.append({
                         "ticker": resolved,
                         "original_ticker": ticker if remapped else resolved,
@@ -502,7 +502,7 @@ class DiscoveryAgent:
                     })
                 else:
                     excluded.add(ticker)
-                    _log(f"  [discovery]   ✗ {ticker} — simbolo non trovato su Alpaca, escluso", "warn")
+                    _log(f"  [discovery]   ✗ {ticker} — symbol not found on Alpaca, excluded", "warn")
                     rejected.append({
                         "ticker": ticker,
                         "original_ticker": ticker,
@@ -515,8 +515,8 @@ class DiscoveryAgent:
                     break
 
             _log(
-                f"  [discovery] Round {round_num} completato — "
-                f"validi: {len(validated)}  esclusi: {len(excluded)}",
+                f"  [discovery] Round {round_num} complete — "
+                f"valid: {len(validated)}  excluded: {len(excluded)}",
                 "ok" if validated else "warn",
             )
 
@@ -528,19 +528,19 @@ class DiscoveryAgent:
             excl_str = ", ".join(sorted(excluded))
             seen_str = ", ".join(sorted(seen))
             retry_suffix = (
-                f"\n\n=== TICKERS ESCLUSI (non disponibili su Alpaca) ===\n{excl_str}\n"
-                f"=== TICKER GIÀ SELEZIONATI ===\n{seen_str}\n"
-                f"IMPORTANTE: NON riproporre nessuno dei ticker sopra. "
-                f"Suggerisci {need} ticker ALTERNATIVI diversi da tutti quelli elencati."
+                f"\n\n=== EXCLUDED TICKERS (not available on Alpaca) ===\n{excl_str}\n"
+                f"=== ALREADY SELECTED TICKERS ===\n{seen_str}\n"
+                f"IMPORTANT: do NOT re-propose any of the tickers above. "
+                f"Suggest {need} ALTERNATIVE tickers different from all those listed."
             )
             _log(
-                f"  [discovery] Cerco {need} ticker alternativi "
-                f"(round {round_num + 1}, esclusi: {excl_str or 'nessuno'})…",
+                f"  [discovery] Looking for {need} alternative tickers "
+                f"(round {round_num + 1}, excluded: {excl_str or 'none'})…",
                 "info",
             )
             pending = self._call_llm(base_llm_prompt + retry_suffix, t_behavior)
             if not pending:
-                _log("  [discovery] LLM non ha proposto ulteriori candidati.", "warn")
+                _log("  [discovery] LLM proposed no further candidates.", "warn")
                 break
 
         # Valid candidates first (sorted by confidence), then rejected ones for display
@@ -590,19 +590,19 @@ class DiscoveryAgent:
             polygon_tickers  = fut_polygon.result(timeout=20)
 
         _log(
-            f"  [discovery] NewsAPI: {len(news_articles)} articoli  "
-            f"Alpaca: {len(alpaca_headlines)} headline  "
-            f"Polygon (settore): {len(polygon_tickers)} ticker",
+            f"  [discovery] NewsAPI: {len(news_articles)} articles  "
+            f"Alpaca: {len(alpaca_headlines)} headlines  "
+            f"Polygon (sector): {len(polygon_tickers)} tickers",
             "ok",
         )
 
         # ── Step 1b: extract company names from prompt + news via LLM ─────────
         _log(
-            f"  [discovery] Estrazione nomi aziende ({config.OLLAMA_SENTIMENT_MODEL})…",
+            f"  [discovery] Extracting company names ({config.OLLAMA_SENTIMENT_MODEL})…",
             "info",
         )
         company_names = _extract_company_names(prompt, news_articles, en_terms, t_behavior)
-        _log(f"  [discovery] Aziende identificate: {', '.join(company_names)}", "info")
+        _log(f"  [discovery] Companies identified: {', '.join(company_names)}", "info")
 
         # ── Step 2: build ranked candidates from Polygon sector results ────────
         ranked = _rank_web_candidates(news_articles, polygon_tickers)
@@ -610,9 +610,9 @@ class DiscoveryAgent:
             top_str = ", ".join(
                 f"{r['ticker']}(×{r['mentions']})" for r in ranked[:10] if r["mentions"] > 0
             ) or ", ".join(r["ticker"] for r in ranked[:8])
-            _log(f"  [discovery] Candidati Polygon rankinizzati: {top_str}", "info")
+            _log(f"  [discovery] Polygon candidates ranked: {top_str}", "info")
         else:
-            _log("  [discovery] Nessun candidato Polygon.", "warn")
+            _log("  [discovery] No Polygon candidates.", "warn")
 
         # ── Step 3: LLM initial selection ─────────────────────────────────────
         _log(

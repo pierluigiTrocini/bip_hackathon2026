@@ -30,6 +30,7 @@ class Broker:
         ticker: str = "",
         positions: dict | None = None,
         portfolio_value: float = 0.0,
+        effective_position_pct: float | None = None,  # F4: UserPreferenceEngine override
     ) -> int:
         if price <= 0:
             return 0
@@ -40,10 +41,12 @@ class Broker:
             return max(0, int(owned))
 
         # BUY: cap per-order size and per-ticker total exposure
-        max_pct = (
+        base_max_pct = (
             config.MAX_POSITION_PCT_CONSERVATIVE if mode == "conservative"
             else config.MAX_POSITION_PCT_NORMAL
         )
+        # F4: use effective_position_pct if provided (already clamped [0.02, 0.15])
+        max_pct = effective_position_pct if effective_position_pct is not None else base_max_pct
         order_budget = cash * max_pct
 
         # Per-ticker concentration cap: existing position + new order ≤ max_pct of portfolio

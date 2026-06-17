@@ -36,7 +36,8 @@ class MarketDisruptor:
     def start(self, tickers: list[str], session_id: str) -> None:
         self._tickers = list(tickers)
         self._session_id = session_id
-        self._load_seen_hashes()
+        self._seen_hashes = set()
+        self._clear_file()
         self._running = True
         self._thread = threading.Thread(
             target=self._run, daemon=True, name="MarketDisruptor"
@@ -66,6 +67,15 @@ class MarketDisruptor:
                     except Exception:
                         pass
         except FileNotFoundError:
+            pass
+
+    def _clear_file(self) -> None:
+        try:
+            import os
+            os.makedirs(os.path.dirname(self._path), exist_ok=True)
+            with self._file_lock:
+                open(self._path, "w").close()
+        except Exception:
             pass
 
     def _run(self) -> None:

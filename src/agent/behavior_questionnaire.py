@@ -28,37 +28,37 @@ _SYNTHESIS_SCHEMA = {
 }
 
 _FALLBACK_QUESTIONS = [
-    "Quanto rischio sei disposto ad accettare? (basso / medio / alto)",
-    "Vuoi privilegiare settori specifici o diversificare?",
-    "Come vuoi reagire a una perdita superiore al 5%?",
+    "How much risk are you willing to accept? (low / medium / high)",
+    "Do you want to focus on specific sectors or diversify?",
+    "How do you want to react to a loss greater than 5%?",
 ]
 
 
 def generate_questions(context: dict, t_behavior: int) -> list[str]:
     """
-    Generate 3–4 targeted questions in Italian to refine the agent's strategy.
+    Generate 3–4 targeted questions in English to refine the agent's strategy.
 
     context keys: active_prompt, tickers, pnl_pct, mode, recent_actions
     """
     ctx_str = (
-        f"Prompt attuale: {context.get('active_prompt', 'non disponibile')[:120]}\n"
-        f"Ticker monitorati: {', '.join(context.get('tickers', []))}\n"
-        f"P&L attuale: {context.get('pnl_pct', 0.0):+.2%}\n"
-        f"Modalità: {context.get('mode', 'normal')}\n"
-        f"Ultime decisioni: {context.get('recent_actions', 'nessuna')}"
+        f"Current prompt: {context.get('active_prompt', 'not available')[:120]}\n"
+        f"Monitored tickers: {', '.join(context.get('tickers', []))}\n"
+        f"Current P&L: {context.get('pnl_pct', 0.0):+.2%}\n"
+        f"Mode: {context.get('mode', 'normal')}\n"
+        f"Recent decisions: {context.get('recent_actions', 'none')}"
     )
     try:
         resp = ollama.generate(
             model=config.OLLAMA_SENTIMENT_MODEL,
             prompt=(
-                "Sei un assistente di trading. "
-                "Genera esattamente 3 domande brevi (max 15 parole ciascuna) in italiano "
-                "per aiutare l'utente a raffinare la strategia dell'agente. "
-                "Le domande devono essere specifiche al contesto qui sotto, non generiche. "
-                "Suggerisci aspetti come: tolleranza al rischio, preferenze settoriali, "
-                "reazione alle perdite, orizzonte temporale.\n\n"
-                f"Contesto:\n{ctx_str}\n\n"
-                "Rispondi SOLO con JSON valido secondo lo schema."
+                "You are a trading assistant. "
+                "Generate exactly 3 short questions (max 15 words each) in English "
+                "to help the user refine the agent's strategy. "
+                "Questions must be specific to the context below, not generic. "
+                "Cover aspects such as: risk tolerance, sector preferences, "
+                "reaction to losses, time horizon.\n\n"
+                f"Context:\n{ctx_str}\n\n"
+                "Reply ONLY with valid JSON according to the schema."
             ),
             format=_QUESTIONS_SCHEMA,
             options={"temperature": 0.7, "num_predict": 200},
@@ -90,14 +90,14 @@ def synthesize_prompt(
         resp = ollama.generate(
             model=config.OLLAMA_SENTIMENT_MODEL,
             prompt=(
-                "Sei un assistente di trading. "
-                "Basandoti sul prompt attuale e sulle risposte dell'utente, "
-                "scrivi un nuovo prompt di comportamento per l'agente. "
-                "Deve essere in italiano, 2–3 frasi, e incorporare le preferenze espresse. "
-                "Non perdere l'intenzione originale se le risposte non la contraddicono.\n\n"
-                f"Prompt attuale: {active_prompt}\n\n"
-                f"Domande e risposte:\n{qa_str}\n\n"
-                "Rispondi SOLO con JSON valido."
+                "You are a trading assistant. "
+                "Based on the current prompt and the user's answers, "
+                "write a new behaviour prompt for the agent. "
+                "It must be in English, 2–3 sentences, and incorporate the stated preferences. "
+                "Do not lose the original intent if the answers do not contradict it.\n\n"
+                f"Current prompt: {active_prompt}\n\n"
+                f"Questions and answers:\n{qa_str}\n\n"
+                "Reply ONLY with valid JSON."
             ),
             format=_SYNTHESIS_SCHEMA,
             options={"temperature": 0.3, "num_predict": 180},
@@ -110,4 +110,4 @@ def synthesize_prompt(
     except Exception:
         pass
     # Fallback: append answers to current prompt
-    return f"{active_prompt}. Aggiornamento utente: {'; '.join(a for a in answers if a.strip())}."
+    return f"{active_prompt}. User update: {'; '.join(a for a in answers if a.strip())}."

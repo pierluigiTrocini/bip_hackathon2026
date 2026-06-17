@@ -57,3 +57,33 @@ NCCI_HALF_LIFE_DAYS:      float = float(os.getenv("NCCI_HALF_LIFE_DAYS", "7.0"))
 
 # Market Disruptor
 DISRUPTOR_NEWS_PATH: str = os.getenv("DISRUPTOR_NEWS_PATH", "data/disruptor_news.jsonl")
+
+# ── F1: News Context Layer ────────────────────────────────────────────────────
+NEWS_CONTEXT_HISTORY_CYCLES: int   = int(os.getenv("NEWS_CONTEXT_HISTORY_CYCLES",   "5"))
+NEWS_CONTEXT_MAX_ARTICLES:   int   = int(os.getenv("NEWS_CONTEXT_MAX_ARTICLES",     "6"))
+NEWS_CONTEXT_MIN_RELEVANCE:  float = float(os.getenv("NEWS_CONTEXT_MIN_RELEVANCE",  "0.50"))
+
+# ── F2: Position Manager ──────────────────────────────────────────────────────
+POSITION_MIN_STOP_LOSS_PCT:     float = float(os.getenv("POSITION_MIN_STOP_LOSS_PCT",     "2.0"))
+POSITION_MAX_STOP_LOSS_PCT:     float = float(os.getenv("POSITION_MAX_STOP_LOSS_PCT",     "8.0"))
+POSITION_MIN_TAKE_PROFIT_PCT:   float = float(os.getenv("POSITION_MIN_TAKE_PROFIT_PCT",   "3.0"))
+POSITION_MAX_TAKE_PROFIT_PCT:   float = float(os.getenv("POSITION_MAX_TAKE_PROFIT_PCT",   "15.0"))
+POSITION_VOLATILITY_MULTIPLIER: float = float(os.getenv("POSITION_VOLATILITY_MULTIPLIER", "3.0"))
+POSITION_HISTORY_CYCLES:        int   = int(os.getenv("POSITION_HISTORY_CYCLES",          "8"))
+POSITION_SENTIMENT_TREND_WINDOW:int   = int(os.getenv("POSITION_SENTIMENT_TREND_WINDOW",  "3"))
+
+# ── F3: Technical Indicators ──────────────────────────────────────────────────
+TECHNICAL_BARS_LOOKBACK:  int   = int(os.getenv("TECHNICAL_BARS_LOOKBACK",    "20"))
+TECHNICAL_RSI_PERIOD:     int   = int(os.getenv("TECHNICAL_RSI_PERIOD",       "14"))
+TECHNICAL_BB_PERIOD:      int   = int(os.getenv("TECHNICAL_BB_PERIOD",        "20"))
+TECHNICAL_BB_STD:         float = float(os.getenv("TECHNICAL_BB_STD",         "2.0"))
+TECHNICAL_RSI_OVERBOUGHT: float = float(os.getenv("TECHNICAL_RSI_OVERBOUGHT", "70.0"))
+TECHNICAL_RSI_OVERSOLD:   float = float(os.getenv("TECHNICAL_RSI_OVERSOLD",   "30.0"))
+TECHNICAL_BB_SQUEEZE_PCT: float = float(os.getenv("TECHNICAL_BB_SQUEEZE_PCT", "1.5"))
+
+# ── F4: User Preference Engine ────────────────────────────────────────────────
+PREFERENCE_UPDATE_EVERY:       int   = int(os.getenv("PREFERENCE_UPDATE_EVERY",        "5"))
+PREFERENCE_WAIT_HISTORY:       int   = int(os.getenv("PREFERENCE_WAIT_HISTORY",        "10"))
+PREFERENCE_CONFLICT_THRESHOLD: float = float(os.getenv("PREFERENCE_CONFLICT_THRESHOLD","0.05"))
+PREFERENCE_EMOTION_WEIGHT:     float = float(os.getenv("PREFERENCE_EMOTION_WEIGHT",    "0.3"))
+PREFERENCE_STYLE_WEIGHT:       float = float(os.getenv("PREFERENCE_STYLE_WEIGHT",      "0.4"))

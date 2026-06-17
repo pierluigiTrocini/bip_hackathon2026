@@ -8,4 +8,4 @@ data/error_log.jsonl
 data/session.json
 data/news_log.jsonl
 agent.log
-data/disruptor_log.jsonl
+data/disruptor_news.jsonl

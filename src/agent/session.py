@@ -37,25 +37,45 @@ class SessionManager:
         decisions = summary.get("decisions", {})
         rows = [
             ("ID", f"{summary.get('session_id', '')[:8]}…"),
-            ("Cicli", str(summary.get("cycles", 0))),
-            ("Ordini", str(summary.get("orders_placed", 0))),
+            ("Cycles", str(summary.get("cycles", 0))),
+            ("Orders", str(summary.get("orders_placed", 0))),
             ("P&L", pnl_str),
-            ("Decisioni autonome", str(summary.get("autonomous_decisions", 0))),
-            ("Errori loggati", str(summary.get("errors", 0))),
+            ("Autonomous decisions", str(summary.get("autonomous_decisions", 0))),
+            ("Logged errors", str(summary.get("errors", 0))),
             ("Buy/Sell/Hold", f"{decisions.get('buy',0)}/{decisions.get('sell',0)}/{decisions.get('hold',0)}"),
         ]
         for label, value in rows:
             table.add_row(f"[bold]{label}:[/bold]", value)
-        panel = Panel(table, title="SESSIONE PRECEDENTE RILEVATA", border_style="yellow")
+        panel = Panel(table, title="PREVIOUS SESSION FOUND", border_style="yellow")
         _console.print(panel)
 
     def ask_resume_or_new(self) -> str:
-        choice = input("Vuoi riprendere questa sessione? [s/N]: ").strip().lower()
-        return "resume" if choice == "s" else "new"
+        choice = input("Resume this session? [y/N]: ").strip().lower()
+        return "resume" if choice == "y" else "new"
 
     def resume(self, session: dict) -> dict:
         session["status"] = "active"
         session["last_active_at"] = _now_utc()
+        # Ensure all F2/F4 fields exist on old sessions
+        session.setdefault("user_stop_loss_pct", None)
+        session.setdefault("user_take_profit_pct", None)
+        session.setdefault("pref_sectors", [])
+        session.setdefault("pref_excluded_sectors", [])
+        session.setdefault("pref_risk_level", "unspecified")
+        session.setdefault("pref_ethics", [])
+        session.setdefault("pref_time_horizon", "unspecified")
+        session.setdefault("pref_emotion", "neutral")
+        session.setdefault("pref_emotion_score", 0.0)
+        session.setdefault("style_hold_rate", 0.5)
+        session.setdefault("style_confirm_rate", 0.5)
+        session.setdefault("style_override_count", 0)
+        session.setdefault("style_reject_sl_count", 0)
+        session.setdefault("style_inferred", "undetected")
+        session.setdefault("derived_confidence_delta", 0.0)
+        session.setdefault("derived_position_pct_delta", 0.0)
+        session.setdefault("derived_mode_bias", "none")
+        session.setdefault("wait_choices", [])
+        session.setdefault("preference_conflicts", [])
         self.save(session)
         return session
 
@@ -77,6 +97,31 @@ class SessionManager:
                 "positions": {},
             },
             "behavior_change_count": 0,
+            # F2: user-defined thresholds
+            "user_stop_loss_pct":    None,
+            "user_take_profit_pct":  None,
+            # F4: explicit preferences
+            "pref_sectors":          [],
+            "pref_excluded_sectors": [],
+            "pref_risk_level":       "unspecified",
+            "pref_ethics":           [],
+            "pref_time_horizon":     "unspecified",
+            # F4: emotional tone
+            "pref_emotion":          "neutral",
+            "pref_emotion_score":    0.0,
+            # F4: implicit style
+            "style_hold_rate":       0.5,
+            "style_confirm_rate":    0.5,
+            "style_override_count":  0,
+            "style_reject_sl_count": 0,
+            "style_inferred":        "undetected",
+            # F4: derived parameters
+            "derived_confidence_delta":   0.0,
+            "derived_position_pct_delta": 0.0,
+            "derived_mode_bias":          "none",
+            # F4: wait history + conflict log
+            "wait_choices":          [],
+            "preference_conflicts":  [],
         }
         self.save(session)
         return session
