@@ -13,12 +13,54 @@ import threading
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
+import requests as _requests
+
 if TYPE_CHECKING:
     from src.agent.correlation_engine import CorrelationEngine
     from src.agent.disruptor import MarketDisruptor
     from src.agent.tool_executor import ToolExecutor
 
 logger = logging.getLogger(__name__)
+
+
+async def _decide_prompt_mode(current: str, new_text: str) -> str:
+    """Ask the LLM whether the new prompt should replace, append to, or be ignored vs. the current one."""
+    from src.agent import config
+
+    if not current.strip():
+        return "replace"
+
+    body = {
+        "model": config.OLLAMA_SENTIMENT_MODEL,
+        "prompt": (
+            f"Current agent instruction: \"{current[:300]}\"\n"
+            f"New instruction from user: \"{new_text[:300]}\"\n\n"
+            "Decide how to update the agent instruction. Reply with exactly one word:\n"
+            "- 'replace' — the new instruction overrides and supersedes the current one\n"
+            "- 'append'  — the new instruction adds new information to keep alongside the current one\n"
+            "- 'ignore'  — the new instruction is semantically identical or too similar to the current one\n"
+            "Reply with only one word: replace, append, or ignore."
+        ),
+        "stream": False,
+    }
+
+    def _call() -> str:
+        try:
+            r = _requests.post(
+                f"{config.OLLAMA_BASE_URL}/api/generate",
+                json=body,
+                timeout=15,
+            )
+            r.raise_for_status()
+            answer = r.json().get("response", "").strip().lower()
+            for word in ("replace", "append", "ignore"):
+                if word in answer:
+                    return word
+        except Exception:
+            pass
+        return "replace"
+
+    return await asyncio.to_thread(_call)
 
 _ACTION_EMOJI = {
     "buy":  "🟢",
@@ -93,11 +135,11 @@ class TelegramNotifier:
             "",
             f"_{_esc(caption)}_" if caption else "",
             "",
-            f"*Ragionamento:* {_esc(reasoning[:300])}",
+            f"*Reasoning:* {_esc(reasoning[:300])}",
         ]
 
         if articles:
-            lines += ["", "*📰 Notizie a supporto:*"]
+            lines += ["", "*📰 Supporting news:*"]
             for a in articles[:4]:
                 title = _esc((a.get("title") or "")[:80])
                 src   = _esc(a.get("source") or "")
@@ -193,14 +235,14 @@ class TelegramNotifier:
                 strat = self._last_strategy
 
             if not rows:
-                await update.message.reply_text("Nessun ciclo completato ancora\\.", parse_mode="MarkdownV2")
+                await update.message.reply_text("No cycle completed yet\\.", parse_mode="MarkdownV2")
                 return
 
             pnl_sym = "📈" if pnl >= 0 else "📉"
             lines = [
-                f"*📊 Riepilogo ciclo {cycle}* \\— {_esc(_now())}",
-                f"Strategia: *{_esc(strat)}*  |  P\\&L: {pnl_sym} *{pnl:+.2%}*",
-                f"Portafoglio: *${pf.get('portfolio_value', 0):,.2f}*  Cash: *${pf.get('cash', 0):,.2f}*",
+                f"*📊 Cycle {cycle} summary* \\— {_esc(_now())}",
+                f"Strategy: *{_esc(strat)}*  |  P\\&L: {pnl_sym} *{pnl:+.2%}*",
+                f"Portfolio: *${pf.get('portfolio_value', 0):,.2f}*  Cash: *${pf.get('cash', 0):,.2f}*",
                 "",
             ]
             for r in rows:
@@ -219,9 +261,9 @@ class TelegramNotifier:
             with self._lock:
                 tickers = list(self._tickers)
             if not tickers or not self._te:
-                await update.message.reply_text("Nessun ticker attivo\\.", parse_mode="MarkdownV2")
+                await update.message.reply_text("No active tickers\\.", parse_mode="MarkdownV2")
                 return
-            lines = [f"*📰 Ultime notizie \\— {_esc(_now())}*", ""]
+            lines = [f"*📰 Latest news \\— {_esc(_now())}*", ""]
             for ticker in tickers:
                 result = self._te.get_news(ticker)
                 articles = result.data.get("articles", []) if result.ok else []
@@ -236,18 +278,18 @@ class TelegramNotifier:
                     lines.append(line)
                 lines.append("")
             await update.message.reply_text(
-                "\n".join(lines) or "Nessuna notizia disponibile\\.",
+                "\n".join(lines) or "No news available\\.",
                 parse_mode="MarkdownV2",
                 disable_web_page_preview=True,
             )
 
         async def cmd_insider(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             if not self._disruptor:
-                await update.message.reply_text("Disruptor non attivo\\.", parse_mode="MarkdownV2")
+                await update.message.reply_text("Disruptor not active\\.", parse_mode="MarkdownV2")
                 return
             with self._lock:
                 tickers = list(self._tickers)
-            lines = [f"*⚡ Notizie Disruptor \\— {_esc(_now())}*", ""]
+            lines = [f"*⚡ Disruptor news \\— {_esc(_now())}*", ""]
             seen: set[str] = set()
             for ticker in tickers:
                 articles = self._disruptor.get_articles(ticker, max_age_seconds=3600)
@@ -265,7 +307,7 @@ class TelegramNotifier:
                     if summary:
                         lines.append(f"   _{summary}_")
             if len(lines) <= 2:
-                lines.append("Nessuna notizia disruptor recente\\.")
+                lines.append("No recent disruptor news\\.")
             await update.message.reply_text("\n".join(lines), parse_mode="MarkdownV2", disable_web_page_preview=True)
 
         async def cmd_nerd(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -273,13 +315,13 @@ class TelegramNotifier:
                 tickers = list(self._tickers)
                 rows    = list(self._last_cycle_rows)
             if not self._ce or not tickers:
-                await update.message.reply_text("Dati tecnici non disponibili\\.", parse_mode="MarkdownV2")
+                await update.message.reply_text("Technical data not available\\.", parse_mode="MarkdownV2")
                 return
-            lines = [f"*🔬 Stats tecniche \\— ciclo {self._last_cycle}*", ""]
+            lines = [f"*🔬 Technical stats \\— cycle {self._last_cycle}*", ""]
 
             # NCCI matrix
             if len(tickers) >= 2:
-                lines.append("*Matrice NCCI \\(correlazione news\\):*")
+                lines.append("*NCCI matrix \\(news correlation\\):*")
                 lines.append("`          " + "  ".join(f"{t[:4]:>4}" for t in tickers) + "`")
                 for ta in tickers:
                     row_vals = []
@@ -294,7 +336,7 @@ class TelegramNotifier:
 
             # Per-ticker technical snapshot
             if rows:
-                lines.append("*Snapshot tecnico:*")
+                lines.append("*Technical snapshot:*")
                 for r in rows:
                     upnl = r.get("unrealized_pnl_pct")
                     upnl_str = f"{upnl:+.1%}" if upnl is not None else "—"
@@ -314,27 +356,27 @@ class TelegramNotifier:
                 with self._lock:
                     cur = _esc(self._active_prompt[:200])
                 await update.message.reply_text(
-                    f"*Prompt attuale:*\n_{cur}_\n\n"
-                    "Uso: `/prompt a <testo>` aggiungi  |  `/prompt s <testo>` sostituisci  |  `/prompt i` ignora",
+                    f"*Current prompt:*\n_{cur}_\n\nSend `/prompt <text>` to update it\\.",
                     parse_mode="MarkdownV2",
                 )
                 return
-            mode_flag = args[0].lower()
-            text = " ".join(args[1:]).strip()
-            if mode_flag == "i":
-                await update.message.reply_text("✅ Input ignorato\\.", parse_mode="MarkdownV2")
-                return
-            if mode_flag not in ("a", "s") or not text:
+            text = " ".join(args).strip()
+            with self._lock:
+                current = self._active_prompt
+            await update.message.reply_text("⏳ Evaluating\\.\\.\\.", parse_mode="MarkdownV2")
+            decision = await _decide_prompt_mode(current, text)
+            if decision == "ignore":
                 await update.message.reply_text(
-                    "Formato: `/prompt a <testo>` \\(aggiungi\\) o `/prompt s <testo>` \\(sostituisci\\)",
+                    "ℹ️ Prompt unchanged — instruction already covered by the current prompt\\.",
                     parse_mode="MarkdownV2",
                 )
                 return
-            mode_label = "aggiunto al" if mode_flag == "a" else "sostituito il"
+            mode_flag = "a" if decision == "append" else "s"
             if self.on_prompt_change:
                 self.on_prompt_change(mode_flag, text)
+            action = "appended to" if mode_flag == "a" else "replaced"
             await update.message.reply_text(
-                f"✅ Prompt {_esc(mode_label)} prompt attuale\\.\n_{_esc(text[:200])}_",
+                f"✅ Prompt {_esc(action)}\\.\n_{_esc(text[:200])}_",
                 parse_mode="MarkdownV2",
             )
 
@@ -347,7 +389,7 @@ class TelegramNotifier:
                 with self._lock:
                     cur = _esc(self._last_strategy)
                 await update.message.reply_text(
-                    f"*Strategia attuale:* {cur}\n\n*Disponibili:*\n{names}\n\nUso: `/modalita <id>`",
+                    f"*Current strategy:* {cur}\n\n*Available:*\n{names}\n\nUsage: `/modalita <id>`",
                     parse_mode="MarkdownV2",
                 )
                 return
@@ -355,7 +397,7 @@ class TelegramNotifier:
             if new_id not in all_strats:
                 ids = ", ".join(f"`{k}`" for k in all_strats)
                 await update.message.reply_text(
-                    f"Strategia `{_esc(new_id)}` non trovata\\. Disponibili: {ids}",
+                    f"Strategy `{_esc(new_id)}` not found\\. Available: {ids}",
                     parse_mode="MarkdownV2",
                 )
                 return
@@ -363,18 +405,18 @@ class TelegramNotifier:
                 self.on_strategy_change(new_id)
             name = _esc(all_strats[new_id]["name"])
             await update.message.reply_text(
-                f"✅ Strategia cambiata → *{name}*",
+                f"✅ Strategy changed → *{name}*",
                 parse_mode="MarkdownV2",
             )
 
         async def cmd_portfolio(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             if not self._te:
-                await update.message.reply_text("ToolExecutor non disponibile\\.", parse_mode="MarkdownV2")
+                await update.message.reply_text("ToolExecutor not available\\.", parse_mode="MarkdownV2")
                 return
             result = self._te.get_portfolio()
             if not result.ok:
                 await update.message.reply_text(
-                    f"Errore API: {_esc(str(result.error))}",
+                    f"API error: {_esc(str(result.error))}",
                     parse_mode="MarkdownV2",
                 )
                 return
@@ -387,13 +429,13 @@ class TelegramNotifier:
             pnl_sym = "📈" if pnl_pct >= 0 else "📉"
             lines = [
                 f"*💼 Portfolio \\— {_esc(_now())}*",
-                f"Valore totale: *\\${pf_value:,.2f}*",
-                f"Liquidità: *\\${cash:,.2f}*",
-                f"P\\&L sessione: {pnl_sym} *{pnl_pct:+.2%}*",
+                f"Total value: *\\${pf_value:,.2f}*",
+                f"Cash: *\\${cash:,.2f}*",
+                f"Session P\\&L: {pnl_sym} *{pnl_pct:+.2%}*",
                 "",
             ]
             if positions:
-                lines.append("*Posizioni aperte:*")
+                lines.append("*Open positions:*")
                 for sym, pos in positions.items():
                     qty   = pos.get("qty", 0)
                     mv    = pos.get("market_value", 0.0)
@@ -410,11 +452,11 @@ class TelegramNotifier:
                         upnl_str = "—"
                         price_str = "—"
                     lines.append(
-                        f"  *{_esc(sym)}*  {qty} az  entry \\${entry:,.2f}  live {price_str}"
+                        f"  *{_esc(sym)}*  {qty} sh  entry \\${entry:,.2f}  live {price_str}"
                         f"  MV \\${mv:,.2f}  P\\&L {upnl_str}"
                     )
             else:
-                lines.append("_Nessuna posizione aperta\\._")
+                lines.append("_No open positions\\._")
 
             await update.message.reply_text(
                 "\n".join(lines),
@@ -424,16 +466,16 @@ class TelegramNotifier:
 
         async def unknown_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             cmds = (
-                "/resume — riepilogo ultimo ciclo\n"
-                "/breaking — ultime notizie per ogni stock\n"
-                "/insider — notizie disruptor\n"
-                "/nerd — correlazioni e statistiche tecniche\n"
-                "/prompt — cambia il prompt dell'agente\n"
-                "/modalita — cambia strategia\n"
-                "/portfolio — stato del portafoglio"
+                "/resume — last cycle summary\n"
+                "/breaking — latest news per stock\n"
+                "/insider — disruptor (high-priority) news\n"
+                "/nerd — NCCI correlations and technical stats\n"
+                "/prompt <text> — replace agent prompt  |  /prompt +<text> append\n"
+                "/modalita — change strategy\n"
+                "/portfolio — portfolio status"
             )
             await update.message.reply_text(
-                f"Comandi disponibili:\n{cmds}",
+                f"Available commands:\n{cmds}",
             )
 
         app.add_handler(CommandHandler("resume",    cmd_resume))
