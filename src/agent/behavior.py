@@ -35,42 +35,42 @@ class BehaviorManager:
             return True
 
     def apply_change(self, memory_manager, imitative_layer, preference_engine=None) -> bool:
-        t_behavior = self._at.t_behavior()
-        done = threading.Event()
-        exc_holder: list[Exception] = []
-
-        def _do_change():
-            try:
-                memory_manager.reset_all()
-                imitative_layer.reload()
-                self._active_prompt = self._pending_prompt
-                self._session["active_prompt"] = self._active_prompt
-                # F4: re-extract preferences from new prompt
-                if preference_engine is not None:
-                    preference_engine.extract_from_prompt(self._active_prompt, t_behavior)
-                    preference_engine.compute_derived_parameters()
-            except Exception as exc:
-                exc_holder.append(exc)
-            finally:
-                done.set()
-
-        t = threading.Thread(target=_do_change, daemon=True)
-        t.start()
-        completed = done.wait(timeout=t_behavior)
-
-        if completed and not exc_holder:
-            self.clear_change_request()
-            return True
-        else:
-            exc_msg = str(exc_holder[0]) if exc_holder else f"timed out after {t_behavior}s"
+        try:
+            memory_manager.reset_all()
+            imitative_layer.reload()
+            self._active_prompt = self._pending_prompt
+            self._session["active_prompt"] = self._active_prompt
+        except Exception as exc:
             journal_module.log_error(
                 source="BehaviorManager",
-                error=f"apply_change failed: {exc_msg}",
+                error=f"apply_change failed: {exc}",
                 session_id=self._session.get("session_id", ""),
             )
             self.revert_to_initial()
             self.clear_change_request()
             return False
+
+        self.clear_change_request()
+
+        # Preference extraction is an LLM call — run in background so the main loop never blocks
+        if preference_engine is not None:
+            t_behavior = self._at.t_behavior()
+            prompt_snapshot = self._active_prompt
+
+            def _extract():
+                try:
+                    preference_engine.extract_from_prompt(prompt_snapshot, t_behavior)
+                    preference_engine.compute_derived_parameters()
+                except Exception as exc:
+                    journal_module.log_error(
+                        source="BehaviorManager",
+                        error=f"preference extraction failed: {exc}",
+                        session_id=self._session.get("session_id", ""),
+                    )
+
+            threading.Thread(target=_extract, daemon=True, name="pref-extract").start()
+
+        return True
 
     def revert_to_initial(self) -> None:
         self._active_prompt = self._initial_prompt
