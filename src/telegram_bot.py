@@ -250,7 +250,7 @@ class TelegramNotifier:
                 return
             lines = [f"*📰 Latest news \\— {_esc(_now())}*", ""]
             for ticker in tickers:
-                result = self._te.get_news(ticker)
+                result = await asyncio.to_thread(self._te.get_news, ticker)
                 articles = result.data.get("articles", []) if result.ok else []
                 if not articles:
                     continue
@@ -397,13 +397,15 @@ class TelegramNotifier:
             if not self._te:
                 await update.message.reply_text("ToolExecutor not available\\.", parse_mode="MarkdownV2")
                 return
-            result = self._te.get_portfolio()
+
+            result = await asyncio.to_thread(self._te.get_portfolio)
             if not result.ok:
                 await update.message.reply_text(
                     f"API error: {_esc(str(result.error))}",
                     parse_mode="MarkdownV2",
                 )
                 return
+
             data      = result.data
             pf_value  = data.get("portfolio_value", 0.0)
             cash      = data.get("cash", 0.0)
@@ -424,8 +426,7 @@ class TelegramNotifier:
                     qty   = pos.get("qty", 0)
                     mv    = pos.get("market_value", 0.0)
                     entry = pos.get("avg_entry_price", 0.0)
-                    # fetch live price for real-time P&L
-                    price_r = self._te.get_price(sym)
+                    price_r = await asyncio.to_thread(self._te.get_price, sym)
                     if price_r.ok and entry > 0:
                         live = price_r.data.get("price", entry)
                         upnl_pct = (live - entry) / entry
