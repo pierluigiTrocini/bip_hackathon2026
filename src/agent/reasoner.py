@@ -139,6 +139,7 @@ class Reasoner:
         take_profit_hint: str = "",
         correlation_section: str = "",
         historical_news_context: str = "",
+        disruptor_context: str = "",
     ) -> dict:
         positions_str = ", ".join(
             f"{sym}: {p['qty']} shares @ ${p['avg_entry_price']:.2f}"
@@ -160,7 +161,13 @@ class Reasoner:
             if historical_news_context else ""
         )
 
+        disruptor_section = (
+            f"=== BREAKING NEWS — DISRUPTOR (ALTA PRIORITÀ) ===\n{disruptor_context}\n\n"
+            if disruptor_context else ""
+        )
+
         user_prompt = (
+            f"{disruptor_section}"
             f"=== STRATEGY: {strategy['name'].upper()} ===\n"
             f"{strategy['system_prompt']}\n\n"
             f"=== ACTION SIGNAL ===\n"

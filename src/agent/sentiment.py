@@ -21,6 +21,7 @@ _NEUTRAL = {
     "rationale": "unavailable",
     "article_count": 0,
     "prompt_filtered": False,
+    "used_articles": [],
 }
 
 

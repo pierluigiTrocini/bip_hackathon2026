@@ -498,6 +498,20 @@ class Dashboard:
                 reasoning_short,
             )
 
+        # Collect disruptor news across all rows for the disruptor panel
+        disruptor_lines: list[str] = []
+        for r in rows:
+            for a in r.get("disruptor_used", []):
+                source = a.get("source", "?")
+                title = a.get("title", "")[:80]
+                summary = a.get("summary", "")[:100]
+                ticker_tag = r["ticker"]
+                disruptor_lines.append(
+                    f"[bold dark_orange]⚡[/bold dark_orange] [bold]{ticker_tag}[/bold] "
+                    f"[dim][{source}][/dim]  {title}"
+                    + (f"\n   [dim]{summary}[/dim]" if summary else "")
+                )
+
         pnl_col = "green" if pnl_pct >= 0 else "red"
         mode_str = "[red]CONSERVATIVE[/red]" if mode == "conservative" else "[green]NORMAL[/green]"
         veto_str = "  [red][NEWS VETO][/red]" if veto else ""
@@ -545,7 +559,6 @@ class Dashboard:
         lines: list[str] = []
 
         if caption:
-            from rich.text import Text as RichText
             wrapped = caption[:160]
             lines.append(f"[bold white]💬 {wrapped}[/bold white]")
         else:
@@ -560,7 +573,6 @@ class Dashboard:
                 source = str(art.get("source", ""))
                 title_art = str(art.get("title", ""))
                 url = str(art.get("url", ""))
-
                 src_padded = source[:12].ljust(12)
                 title_truncated = title_art[:70] + ("…" if len(title_art) > 70 else "")
                 lines.append(f"[bold cyan]{src_padded}[/bold cyan]  ·  {title_truncated}")
@@ -589,7 +601,6 @@ class Dashboard:
         if len(tickers) < 2:
             return
 
-        # Build symmetric lookup and check if any non-zero value exists
         ncci: dict[tuple[str, str], float] = {}
         has_data = False
         for i, a in enumerate(tickers):

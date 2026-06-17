@@ -54,3 +54,6 @@ NCCI_REBUILD_EVERY:       int   = int(os.getenv("NCCI_REBUILD_EVERY", "10"))
 NCCI_THRESHOLD_DISPLAY:   float = float(os.getenv("NCCI_THRESHOLD_DISPLAY", "0.20"))
 NCCI_KEYWORD_MIN_WEIGHT:  float = float(os.getenv("NCCI_KEYWORD_MIN_WEIGHT", "0.15"))
 NCCI_HALF_LIFE_DAYS:      float = float(os.getenv("NCCI_HALF_LIFE_DAYS", "7.0"))
+
+# Market Disruptor
+DISRUPTOR_NEWS_PATH: str = os.getenv("DISRUPTOR_NEWS_PATH", "data/disruptor_news.jsonl")

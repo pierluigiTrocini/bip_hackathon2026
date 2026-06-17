@@ -14,6 +14,7 @@ from src.agent.adaptive_timeout import AdaptiveTimeout
 from src.agent.behavior import BehaviorManager
 from src.agent.broker import Broker
 from src.agent.correlation_engine import CorrelationEngine
+from src.agent.disruptor import MarketDisruptor
 from src.agent.imitative_layer import ImiativeLayer
 from src.agent.memory_manager import MemoryManager
 from src.agent.reasoner import Reasoner
@@ -76,6 +77,7 @@ class AgentLoop:
         dashboard,
         correlation_engine: CorrelationEngine | None = None,
         tickers: list[str] | None = None,
+        disruptor: MarketDisruptor | None = None,
     ) -> None:
         self._session = session
         self._at = adaptive_timeout
@@ -88,6 +90,7 @@ class AgentLoop:
         self._sm = session_manager
         self._dashboard = dashboard
         self._correlation_engine = correlation_engine or CorrelationEngine()
+        self._disruptor = disruptor
         self._running = False
         self._cycle = session.get("cycle", 0)
         self._tickers: list[str] = tickers if tickers else config.TICKERS
@@ -343,6 +346,8 @@ class AgentLoop:
         self._session["cycle"] = self._cycle
         session_id = self._session.get("session_id", "")
         active_prompt = self._bm.active_prompt
+        if self._disruptor:
+            self._disruptor.update_cycle(self._cycle)
         t_wait = self._at.t_wait()
         t_behavior = self._at.t_behavior()
         market_open = self._te.is_market_open()
@@ -416,11 +421,30 @@ class AgentLoop:
 
                 portfolio_result = _initial_portfolio
 
-                articles = news_result.data.get("articles", []) if news_result.ok else []
-                article_count = len(articles)
+                regular_articles = news_result.data.get("articles", []) if news_result.ok else []
+
+                # Fetch disruptor articles and merge (disruptor first, regular after; dedup by title)
+                disruptor_articles: list[dict] = []
+                if self._disruptor:
+                    disruptor_articles = self._disruptor.get_articles(ticker, max_age_seconds=300)
+                    for a in disruptor_articles:
+                        a["_from_disruptor"] = True
+                    if disruptor_articles:
+                        self._dashboard.log(
+                            f"  {ticker} → ⚡ disruptor: {len(disruptor_articles)} notizie prioritarie",
+                            "warn",
+                        )
+
+                seen_titles: set[str] = {a.get("title", "").lower() for a in disruptor_articles}
+                combined_articles = list(disruptor_articles) + [
+                    a for a in regular_articles
+                    if a.get("title", "").lower() not in seen_titles
+                ]
+                article_count = len(combined_articles)
+
                 self._dashboard.log(
                     f"  {ticker} → bars:{'ok' if bars_result.ok else 'err'}  "
-                    f"news:{article_count} articoli  "
+                    f"news:{len(regular_articles)} + ⚡{len(disruptor_articles)} disruptor = {article_count} tot  "
                     f"portfolio:{'ok' if portfolio_result.ok else 'err'}",
                     "ok" if (bars_result.ok and portfolio_result.ok) else "warn",
                 )
@@ -428,7 +452,7 @@ class AgentLoop:
                 self._dashboard.log(f"  {ticker} → [3] analisi sentiment ({article_count} art.)…", "info")
                 from src.agent import sentiment as sentiment_module
                 sentiment_data, keywords_and_relevance = sentiment_module.analyse(
-                    ticker, articles, active_prompt, t_behavior
+                    ticker, combined_articles, active_prompt, t_behavior
                 )
                 self._dashboard.log(
                     f"  {ticker} → sentiment: {sentiment_data['label']} "
@@ -436,14 +460,16 @@ class AgentLoop:
                     "ok",
                 )
 
-                # Persist articles to news_log (non-blocking; never raises)
+                # Persist regular articles to news_log (disruptor articles go to their own file)
+                non_duped_regular = combined_articles[len(disruptor_articles):]
+                kw_for_regular = keywords_and_relevance[len(disruptor_articles):]
                 news_log.write_articles(
-                    articles=articles,
+                    articles=non_duped_regular,
                     ticker=ticker,
                     cycle=self._cycle,
                     session_id=session_id,
                     sentiment_score=sentiment_data["score"],
-                    keywords_and_relevance=keywords_and_relevance,
+                    keywords_and_relevance=kw_for_regular,
                 )
 
                 # Fetch historical news from previous cycles for temporal reasoning
@@ -459,6 +485,16 @@ class AgentLoop:
                         f"  {ticker} → storico news: {len(historical_entries)} articoli pregressi (ultimi 7gg)",
                         "info",
                     )
+
+                # Build disruptor context for reasoner (placed at top of prompt = highest priority)
+                disruptor_context = ""
+                if disruptor_articles:
+                    lines = [
+                        f"⚡ [{a.get('source', '?')}] {a.get('title', '')}:"
+                        f" {a.get('summary', '')[:120]}"
+                        for a in disruptor_articles[:3]
+                    ]
+                    disruptor_context = "\n".join(lines)
 
                 # 4. PORTFOLIO HEALTH CHECK
                 pnl_pct = portfolio_result.data.get("pnl_pct", 0.0) if portfolio_result.ok else 0.0
@@ -488,7 +524,7 @@ class AgentLoop:
                     ).start()
 
                 # Register dynamically mentioned tickers from news
-                for article in articles:
+                for article in combined_articles:
                     for mentioned in _extract_mentioned_tickers(article):
                         self._correlation_engine.register_dynamic_ticker(mentioned)
 
@@ -577,6 +613,7 @@ class AgentLoop:
                     take_profit_hint=take_profit_hint,
                     correlation_section=correlation_section,
                     historical_news_context=historical_news_context,
+                    disruptor_context=disruptor_context,
                 )
 
                 stale_tag = f"  -stale:{decision['stale_penalty']:.2f}" if decision["stale_penalty"] > 0 else ""
@@ -715,6 +752,14 @@ class AgentLoop:
                     positions=positions,
                 )
                 journal_module.write_entry(entry)
+                journal_module.write_news_entries(
+                    articles=regular_articles,
+                    ticker=ticker,
+                    cycle=self._cycle,
+                    session_id=session_id,
+                    sentiment_score=sentiment_data["score"],
+                    decision_triggered=action,
+                )
                 self._mm.update(entry)
                 last_entry = entry
 
@@ -732,6 +777,7 @@ class AgentLoop:
                     "stale": stale,
                     "unrealized_pnl_pct": unrealized_pnl_pct,
                     "avg_entry_price": avg_entry_price,
+                    "disruptor_used": disruptor_articles,
                 })
 
                 # 9. UPDATE DASHBOARD

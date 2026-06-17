@@ -43,8 +43,9 @@ def main():
     from src.agent.broker import Broker
     from src.agent.session import SessionManager
     from src.agent.behavior import BehaviorManager
-    from src.agent.discovery import DiscoveryAgent
     from src.agent.correlation_engine import CorrelationEngine
+    from src.agent.discovery import DiscoveryAgent
+    from src.agent.disruptor import MarketDisruptor
     from src.agent.loop import AgentLoop
     from ui.dashboard import Dashboard
 
@@ -102,6 +103,7 @@ def main():
     behavior_manager    = BehaviorManager(session, adaptive_timeout)
     discovery_agent     = DiscoveryAgent()
     correlation_engine  = CorrelationEngine()
+    disruptor           = MarketDisruptor()
     discovery_agent._session_id = session.get("session_id", "")
     dashboard.log(
         f"Modelli: {config.OLLAMA_REASONING_MODEL} + {config.OLLAMA_SENTIMENT_MODEL}",
@@ -157,12 +159,11 @@ def main():
         dashboard.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", "info")
         dashboard.log("", "info")
 
-    # Step 3c: Show portfolio positions on resume (discovery loop handles new sessions)
-    if resuming:
-        dashboard.log("Recupero posizioni aperte nel portfolio…", "info")
-        _portfolio_result = tool_executor.get_portfolio()
-        _positions = _portfolio_result.data.get("positions", {}) if _portfolio_result.ok else {}
-        dashboard.print_portfolio_positions(_positions)
+    # Step 3c: Show current portfolio positions (new session + resume)
+    dashboard.log("Recupero posizioni aperte nel portfolio…", "info")
+    _portfolio_result = tool_executor.get_portfolio()
+    _positions = _portfolio_result.data.get("positions", {}) if _portfolio_result.ok else {}
+    dashboard.print_portfolio_positions(_positions)
 
     # Step 4: Start loop
     loop = AgentLoop(
@@ -178,6 +179,7 @@ def main():
         dashboard=dashboard,
         correlation_engine=correlation_engine,
         tickers=confirmed_tickers,
+        disruptor=disruptor,
     )
 
     dashboard.log("Loop avviato. Ctrl+C per fermare.", "ok")
@@ -187,6 +189,7 @@ def main():
         dashboard.log("Shutdown richiesto dall'utente (Ctrl+C).", "warn")
     finally:
         loop.stop()
+        disruptor.stop()
         dashboard.log("Cancellazione ordini aperti…", "warn")
         broker.cancel_all_orders()
         session_mgr.mark_paused(session)

@@ -149,6 +149,43 @@ def outcome_update(ticker: str, new_price: float, session_id: str, path: str | N
         pass
 
 
+def write_news_entries(
+    articles: list[dict],
+    ticker: str,
+    cycle: int,
+    session_id: str,
+    sentiment_score: float,
+    decision_triggered: str,
+    path: str | None = None,
+) -> None:
+    if path is None:
+        path = config.NEWS_LOG_PATH
+    try:
+        _ensure_dir(path)
+        with open(path, "a", encoding="utf-8") as f:
+            for a in articles:
+                entry = {
+                    "ts": _now_utc(),
+                    "ticker": ticker,
+                    "cycle": cycle,
+                    "session_id": session_id,
+                    "source": a.get("source", "alpaca"),
+                    "title": a.get("title", ""),
+                    "summary": a.get("summary", ""),
+                    "url": a.get("url", ""),
+                    "keywords": a.get("keywords", a.get("symbols", [])),
+                    "sentiment_score": round(sentiment_score, 2),
+                    "relevance_score": 1.0,
+                    "decision_triggered": decision_triggered,
+                    "used_in_cycle": cycle,
+                    "ttl_days": 7,
+                    "compacted": False,
+                }
+                f.write(json.dumps(entry) + "\n")
+    except Exception:
+        pass
+
+
 def read_session_summary(session_id: str) -> dict:
     decisions: dict[str, int] = {"buy": 0, "sell": 0, "hold": 0}
     orders_placed = 0
