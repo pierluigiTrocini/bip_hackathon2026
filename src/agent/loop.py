@@ -768,6 +768,12 @@ class AgentLoop:
                 strategy_name=strategy_name,
             )
 
+        if len(effective_tickers) >= 2:
+            self._dashboard.print_correlation_matrix(
+                tickers=effective_tickers,
+                engine=self._correlation_engine,
+            )
+
         # Auto-switch check every 5 cycles (before wait, so user is engaged)
         if self._cycle % 5 == 0:
             self._in_wait_phase = True  # pause stdin_listener during interactive prompt

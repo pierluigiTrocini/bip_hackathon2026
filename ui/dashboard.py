@@ -13,6 +13,8 @@ from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeRe
 from rich.table import Table
 from rich.text import Text
 
+from src.agent import config
+
 _console = Console()
 
 _STEP_COLORS = {
@@ -574,6 +576,85 @@ class Dashboard:
                 body,
                 title=f"[bold]{title}[/bold]",
                 border_style=border,
+                padding=(1, 2),
+            )
+        )
+
+    def print_correlation_matrix(self, tickers: list[str], engine) -> None:
+        """
+        Print an NCCI correlation matrix for the given tickers.
+        engine: CorrelationEngine instance (duck-typed to avoid circular import).
+        Skipped when fewer than 2 tickers are provided.
+        """
+        if len(tickers) < 2:
+            return
+
+        # Build symmetric lookup and check if any non-zero value exists
+        ncci: dict[tuple[str, str], float] = {}
+        has_data = False
+        for i, a in enumerate(tickers):
+            for b in tickers[i + 1:]:
+                v = engine.get_ncci(a, b)
+                ncci[(a, b)] = v
+                ncci[(b, a)] = v
+                if v > 0.0:
+                    has_data = True
+
+        with self._lock:
+            cycle = self._cycle
+
+        if not has_data:
+            _console.print(
+                Panel(
+                    "[dim]Correlazioni non ancora disponibili — news insufficienti per calcolare NCCI.[/dim]",
+                    title=f"[bold dim]◆ NCCI — Ciclo {cycle}[/bold dim]",
+                    border_style="dim",
+                    padding=(0, 2),
+                )
+            )
+            return
+
+        table = Table(
+            show_header=True,
+            header_style="bold",
+            box=None,
+            padding=(0, 2),
+        )
+        table.add_column("", style="bold", min_width=6)
+        for t in tickers:
+            table.add_column(t, justify="center", min_width=6)
+
+        for row_t in tickers:
+            cells: list[str] = [f"[bold]{row_t}[/bold]"]
+            for col_t in tickers:
+                if row_t == col_t:
+                    cells.append("[dim]━━━[/dim]")
+                else:
+                    v = ncci.get((row_t, col_t), 0.0)
+                    if v >= 0.5:
+                        cells.append(f"[bold red]{v:.2f}[/bold red]")
+                    elif v >= 0.3:
+                        cells.append(f"[yellow]{v:.2f}[/yellow]")
+                    elif v >= config.NCCI_THRESHOLD_DISPLAY:
+                        cells.append(f"[white]{v:.2f}[/white]")
+                    else:
+                        cells.append(f"[dim]{v:.2f}[/dim]")
+            table.add_row(*cells)
+
+        subtitle = (
+            f"[dim]"
+            f"[bold red]rosso[/bold red] ≥ 0.50  "
+            f"[yellow]giallo[/yellow] ≥ 0.30  "
+            f"bianco ≥ {config.NCCI_THRESHOLD_DISPLAY:.2f}  "
+            f"[dim]grigio[/dim] = trascurabile"
+            f"[/dim]"
+        )
+        _console.print(
+            Panel(
+                table,
+                title=f"[bold dim]◆ NCCI — Correlazioni ticker — Ciclo {cycle}[/bold dim]",
+                subtitle=subtitle,
+                border_style="dim",
                 padding=(1, 2),
             )
         )
