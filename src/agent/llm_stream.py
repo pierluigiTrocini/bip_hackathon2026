@@ -14,7 +14,6 @@ Verbosity:
 import os
 import sys
 import threading
-import time
 
 import ollama
 
@@ -22,8 +21,6 @@ import ollama
 LOOP_VERBOSE: bool = False
 
 _print_lock = threading.Lock()
-_erase_done = threading.Event()
-_erase_done.set()  # initially "done" — nothing pending
 
 
 def generate(
@@ -37,31 +34,16 @@ def generate(
     """
     Drop-in replacement for ollama.generate() with optional gray streaming UX.
 
-    show_output=True  → stream tokens in dark gray; erase after 1-second pause
-                        (pause is non-blocking: caller returns immediately after streaming)
+    show_output=True  → stream tokens in dark gray; box stays and scrolls naturally
     show_output=False → run silently, no terminal output
 
     Thread-safe: serialises terminal writes via _print_lock.
     """
     with _print_lock:
-        # Wait for any pending deferred erase from the previous visible call.
-        _erase_done.wait(timeout=1.5)
-
         if not show_output:
             return _call_silent(model, prompt, format, options, keep_alive)
 
-        text, newline_count = _stream_tokens(model, prompt, format, options, keep_alive)
-
-    # Deferred erase: pause 1 second then erase, without blocking the caller.
-    _erase_done.clear()
-
-    def _deferred_erase() -> None:
-        time.sleep(1.0)
-        sys.stdout.write(f"\033[{newline_count}A\033[J")
-        sys.stdout.flush()
-        _erase_done.set()
-
-    threading.Thread(target=_deferred_erase, daemon=True).start()
+        text, _ = _stream_tokens(model, prompt, format, options, keep_alive)
 
     return text
 

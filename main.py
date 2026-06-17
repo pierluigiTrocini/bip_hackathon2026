@@ -52,6 +52,27 @@ def main():
     dashboard = Dashboard()
     dashboard.log("BIP Trading Agent 2026 — avvio…", "info")
 
+    # Step 0: Model selection
+    print(
+        f"\nModello ragionamento: [{config.OLLAMA_REASONING_MODEL}]  "
+        f"| Modello sentiment: [{config.OLLAMA_SENTIMENT_MODEL}]"
+    )
+    reasoning_input = input(
+        f"Modello Ollama per il ragionamento (INVIO = {config.OLLAMA_REASONING_MODEL}): "
+    ).strip()
+    if reasoning_input:
+        config.OLLAMA_REASONING_MODEL = reasoning_input
+    sentiment_input = input(
+        f"Modello Ollama per il sentiment  (INVIO = {config.OLLAMA_SENTIMENT_MODEL}): "
+    ).strip()
+    if sentiment_input:
+        config.OLLAMA_SENTIMENT_MODEL = sentiment_input
+    dashboard.log(
+        f"Modelli selezionati → ragionamento:[{config.OLLAMA_REASONING_MODEL}]  "
+        f"sentiment:[{config.OLLAMA_SENTIMENT_MODEL}]",
+        "ok",
+    )
+
     # Step 1: Detect previous session
     session_mgr = SessionManager()
     dashboard.log("Ricerca sessione precedente…", "info")

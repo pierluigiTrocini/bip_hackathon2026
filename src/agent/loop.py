@@ -359,7 +359,7 @@ class AgentLoop:
             f"── Ciclo {self._cycle} ─────────────────  "
             f"mercato:{mkt_str}  strategia:{strategy_name}  "
             f"t_wait:{t_wait}s  t_behavior:{t_behavior}s  ticker:[{tickers_str}]",
-            "info",
+            "cycle",
         )
 
         veto_triggered = False
