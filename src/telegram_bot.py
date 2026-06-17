@@ -358,24 +358,34 @@ class TelegramNotifier:
                 with self._lock:
                     cur = _esc(self._active_prompt[:200])
                 await update.message.reply_text(
-                    f"*Current prompt:*\n_{cur}_\n\nSend `/prompt <text>` to update it\\.",
+                    f"*Current prompt:*\n_{cur}_\n\n`/prompt <text>` — auto replace\\/append\n`/prompt \\+<text>` — force append",
                     parse_mode="MarkdownV2",
                 )
                 return
             text = " ".join(args).strip()
-            with self._lock:
-                current = self._active_prompt
-            decision = _decide_prompt_mode(current, text)
-            if decision == "ignore":
-                await update.message.reply_text(
-                    "ℹ️ Prompt unchanged — instruction already covered by the current prompt\\.",
-                    parse_mode="MarkdownV2",
-                )
-                return
-            mode_flag = "a" if decision == "append" else "s"
+
+            # Explicit + prefix forces append, bypassing the auto-decision
+            if text.startswith("+"):
+                text = text[1:].strip()
+                if not text:
+                    await update.message.reply_text("Please provide a prompt text\\.", parse_mode="MarkdownV2")
+                    return
+                mode_flag = "a"
+            else:
+                with self._lock:
+                    current = self._active_prompt
+                decision = _decide_prompt_mode(current, text)
+                if decision == "ignore":
+                    await update.message.reply_text(
+                        "ℹ️ Prompt unchanged — instruction already covered\\.",
+                        parse_mode="MarkdownV2",
+                    )
+                    return
+                mode_flag = "a" if decision == "append" else "s"
+
             if self.on_prompt_change:
                 self.on_prompt_change(mode_flag, text)
-            action = "appended to" if mode_flag == "a" else "replaced"
+            action = "appended" if mode_flag == "a" else "replaced"
             await update.message.reply_text(
                 f"✅ Prompt {_esc(action)}\\.\n_{_esc(text[:200])}_",
                 parse_mode="MarkdownV2",
