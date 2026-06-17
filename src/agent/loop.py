@@ -146,6 +146,8 @@ class AgentLoop:
         applied = self._bm.apply_change(self._mm, self._il, preference_engine=self._upe)
         if applied:
             self._bm.increment_change_count(self._session)
+            if self._telegram:
+                self._telegram.notify_prompt_applied(self._bm.active_prompt)
         self._sm.save(self._session)
 
     def _graceful_stop_tasks(self) -> None:

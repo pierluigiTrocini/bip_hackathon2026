@@ -138,6 +138,11 @@ class TelegramNotifier:
 
         self._send("\n".join(l for l in lines if l is not None))
 
+    def notify_prompt_applied(self, new_prompt: str) -> None:
+        self._send(
+            f"✅ *Prompt applied:*\n_{_esc(new_prompt[:300])}_"
+        )
+
     def notify_cycle_end(
         self,
         cycle: int,
