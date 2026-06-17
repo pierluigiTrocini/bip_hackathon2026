@@ -219,7 +219,7 @@ def main():
         loop._apply_strategy_switch(new_id)
 
     def _tg_prompt_change(mode: str, text: str) -> None:
-        with behavior_manager._lock if hasattr(behavior_manager, "_lock") else __import__("contextlib").nullcontext():
+        with behavior_manager._change_lock:
             current = behavior_manager.active_prompt
             if mode == "a":
                 behavior_manager.request_change(f"{current}. {text}")

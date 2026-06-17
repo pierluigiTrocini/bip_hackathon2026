@@ -13,7 +13,6 @@ import threading
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
-import requests as _requests
 
 if TYPE_CHECKING:
     from src.agent.correlation_engine import CorrelationEngine
@@ -23,44 +22,25 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-async def _decide_prompt_mode(current: str, new_text: str) -> str:
-    """Ask the LLM whether the new prompt should replace, append to, or be ignored vs. the current one."""
-    from src.agent import config
-
+def _decide_prompt_mode(current: str, new_text: str) -> str:
+    """Decide whether to replace, append, or ignore based on token overlap — no LLM call needed."""
     if not current.strip():
         return "replace"
 
-    body = {
-        "model": config.OLLAMA_SENTIMENT_MODEL,
-        "prompt": (
-            f"Current agent instruction: \"{current[:300]}\"\n"
-            f"New instruction from user: \"{new_text[:300]}\"\n\n"
-            "Decide how to update the agent instruction. Reply with exactly one word:\n"
-            "- 'replace' — the new instruction overrides and supersedes the current one\n"
-            "- 'append'  — the new instruction adds new information to keep alongside the current one\n"
-            "- 'ignore'  — the new instruction is semantically identical or too similar to the current one\n"
-            "Reply with only one word: replace, append, or ignore."
-        ),
-        "stream": False,
-    }
+    def _tokens(s: str) -> set[str]:
+        return {w.lower().strip(".,!?;:") for w in s.split() if len(w) > 3}
 
-    def _call() -> str:
-        try:
-            r = _requests.post(
-                f"{config.OLLAMA_BASE_URL}/api/generate",
-                json=body,
-                timeout=15,
-            )
-            r.raise_for_status()
-            answer = r.json().get("response", "").strip().lower()
-            for word in ("replace", "append", "ignore"):
-                if word in answer:
-                    return word
-        except Exception:
-            pass
-        return "replace"
+    cur_tokens = _tokens(current)
+    new_tokens = _tokens(new_text)
+    if not new_tokens:
+        return "ignore"
 
-    return await asyncio.to_thread(_call)
+    overlap = len(cur_tokens & new_tokens) / len(new_tokens)
+    if overlap >= 0.70:
+        return "ignore"   # most words already in current prompt
+    if overlap >= 0.30:
+        return "append"   # partial overlap — add to existing
+    return "replace"      # mostly new content — replace
 
 _ACTION_EMOJI = {
     "buy":  "🟢",
@@ -363,8 +343,7 @@ class TelegramNotifier:
             text = " ".join(args).strip()
             with self._lock:
                 current = self._active_prompt
-            await update.message.reply_text("⏳ Evaluating\\.\\.\\.", parse_mode="MarkdownV2")
-            decision = await _decide_prompt_mode(current, text)
+            decision = _decide_prompt_mode(current, text)
             if decision == "ignore":
                 await update.message.reply_text(
                     "ℹ️ Prompt unchanged — instruction already covered by the current prompt\\.",
