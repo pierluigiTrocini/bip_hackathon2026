@@ -219,12 +219,11 @@ def main():
         loop._pending_strategy = new_id
 
     def _tg_prompt_change(mode: str, text: str) -> None:
-        with behavior_manager._change_lock:
-            current = behavior_manager.active_prompt
-            if mode == "a":
-                behavior_manager.request_change(f"{current}. {text}")
-            else:
-                behavior_manager.request_change(text)
+        current = behavior_manager.active_prompt
+        if mode == "a":
+            behavior_manager.request_change(f"{current}. {text}")
+        else:
+            behavior_manager.request_change(text)
 
     telegram_notifier.on_strategy_change = _tg_strategy_change
     telegram_notifier.on_prompt_change   = _tg_prompt_change
