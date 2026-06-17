@@ -20,11 +20,15 @@ This project implements a sophisticated autonomous trading system that:
 ✅ **Persistent JSONL journal** for full decision traceability  
 ✅ **Self-correcting** with STALE_DATA penalties and timeout fallbacks  
 ✅ **Rich TUI dashboard** for real-time monitoring  
+✅ **News Co-occurrence Correlation Index (NCCI)** with Jaccard similarity for cross-ticker analysis  
+✅ **Dynamic Strategy Library** with customizable trading strategies  
+✅ **Behavior Questionnaire System** for adaptive agent personality  
+✅ **Advanced Discovery Phase** with ticker cross-search and validation  
 
 **Evaluation Criteria:**
 - Demonstrable Functionality (40%) — stable loop, error handling, persistent logs
 - Reasoning Quality (35%) — no hallucinations, confidence gating, self-reflection
-- Originality (25%) — dual-model, HOT/WARM/COLD, imitative layer, adaptive timeout
+- Originality (25%) — dual-model, HOT/WARM/COLD, imitative layer, adaptive timeout, NCCI correlation analysis
 
 ---
 
@@ -94,7 +98,7 @@ uv run python main.py
 The agent will:
 1. Ask if you want to resume a previous session or start new
 2. If new, ask for a trading strategy/prompt (e.g., "green investing")
-3. Run a **discovery phase** to select tickers
+3. Run a **discovery phase** to select and validate tickers with cross-search
 4. Begin autonomous trading loop (Ctrl+C to gracefully stop)
 
 ---
@@ -115,9 +119,12 @@ The agent will:
 | **`reasoner.py`** | Make buy/sell/hold decisions using Gemma4:12b with penalties |
 | **`broker.py`** | Execute orders on Alpaca, manage positions |
 | **`session.py`** | Manage session lifecycle (resume/new, UUID, state) |
-| **`behavior.py`** | Handle active prompt changes + fallback logic |
+| **`behavior.py`** | Handle active prompt changes + fallback logic + behavior questionnaire |
 | **`loop.py`** | Main autonomous trading loop |
-| **`ui/dashboard.py`** | Rich TUI dashboard for monitoring |
+| **`discovery.py`** | Discovery phase with ticker validation and cross-search |
+| **`correlation.py`** | News Co-occurrence Correlation Index (NCCI) + Jaccard similarity |
+| **`strategy_library.py`** | Dynamic strategy library with customizable trading strategies |
+| **`ui/dashboard.py`** | Rich TUI dashboard for monitoring with strategy display |
 
 ### **Decision Flow**
 
@@ -126,54 +133,70 @@ The agent will:
 │                    MAIN LOOP                            │
 │  (runs every T_WAIT seconds, adaptive)                  │
 └─────────────────────────────────────────────────────────┘
-                         │
-                         ▼
-        ┌────────────────────────────────┐
-        │  1. Fetch Market Data          │
-        │  - Latest price (AAPL, TSLA...) │
-        │  - Moving average (MA5)         │
-        │  - Recent news articles         │
-        └────────────────────────────────┘
-                         │
-                         ▼
-        ┌────────────────────────────────┐
-        │  2. Sentiment Analysis          │
-        │  (qwen2.5:3b)                  │
-        │  Score: -1.0 to +1.0           │
-        │  + Confidence gate              │
-        └────────────────────────────────┘
-                         │
-                         ▼
-        ┌────────────────────────────────┐
-        │  3. Build Memory Context       │
-        │  HOT: last 5 decisions         │
-        │  WARM: LLM-compacted summary   │
-        └────────────────────────────────┘
-                         │
-                         ▼
-        ┌────────────────────────────────┐
-        │  4. Reason (Gemma4:12b)        │
-        │  - Imitative hints injected    │
-        │  - STALE_DATA penalty applied  │
-        │  - Timeout: T_behavior         │
-        │  Decision: BUY | SELL | HOLD   │
-        └────────────────────────────────┘
-                         │
-                         ▼
-        ┌────────────────────────────────┐
-        │  5. Place Order (if BUY/SELL)  │
-        │  - Position sizing (10% max)   │
-        │  - Market hours check          │
-        │  - Error handling              │
-        └────────────────────────────────┘
-                         │
-                         ▼
-        ┌────────────────────────────────┐
-        │  6. Journal + Update Memory    │
-        │  - Write JSONL entry          │
-        │  - Update HOT/WARM            │
-        │  - Track outcome (next cycle) │
-        └────────────────────────────────┘
+                          │
+                          ▼
+         ┌────────────────────────────────┐
+         │  1. Fetch Market Data          │
+         │  - Latest price (AAPL, TSLA...) │
+         │  - Moving average (MA5)         │
+         │  - Recent news articles         │
+         │  - Cross-ticker correlations    │
+         └────────────────────────────────┘
+                          │
+                          ▼
+         ┌────────────────────────────────┐
+         │  2. Sentiment Analysis          │
+         │  (qwen2.5:3b)                  │
+         │  Score: -1.0 to +1.0           │
+         │  + Confidence gate              │
+         └────────────────────────────────┘
+                          │
+                          ▼
+         ┌────────────────────────────────┐
+         │  3. Correlation Analysis        │
+         │  (NCCI + Jaccard similarity)   │
+         │  Cross-ticker patterns         │
+         └────────────────────────────────┘
+                          │
+                          ▼
+         ┌────────────────────────────────┐
+         │  4. Build Memory Context       │
+         │  HOT: last 5 decisions         │
+         │  WARM: LLM-compacted summary   │
+         └────────────────────────────────┘
+                          │
+                          ▼
+         ┌────────────────────────────────┐
+         │  5. Reason (Gemma4:12b)        │
+         │  - Strategy-based prompts      │
+         │  - Imitative hints injected    │
+         │  - STALE_DATA penalty applied  │
+         │  - Timeout: T_behavior         │
+         │  Decision: BUY | SELL | HOLD   │
+         └────────────────────────────────┘
+                          │
+                          ▼
+         ┌────────────────────────────────┐
+         │  6. Order Quantity Calc.       │
+         │  - Enhanced position sizing    │
+         │  - Strategy signal mapping     │
+         │  - Market hours check          │
+         └────────────────────────────────┘
+                          │
+                          ▼
+         ┌────────────────────────────────┐
+         │  7. Place Order (if BUY/SELL)  │
+         │  - Position sizing (10% max)   │
+         │  - Error handling              │
+         └────────────────────────────────┘
+                          │
+                          ▼
+         ┌────────────────────────────────┐
+         │  8. Journal + Update Memory    │
+         │  - Write JSONL entry          │
+         │  - Update HOT/WARM            │
+         │  - Track outcome (next cycle) │
+         └────────────────────────────────┘
 ```
 
 ---
@@ -225,7 +248,39 @@ Loads a static dataset of 5 known investor strategies:
 
 Filters strategies by keyword matching against active prompt, injects top 2 matches into reasoning.
 
-### **5. Journal Entry**
+### **5. Dynamic Strategy Library**
+
+Customizable trading strategies with expert-level prompts:
+- Strategy encapsulation for various trading methodologies
+- Seamless integration into reasoner for system prompt generation
+- Strategy switching and signal mapping capabilities
+- Dashboard display of current strategy
+
+### **6. News Co-occurrence Correlation Index (NCCI)**
+
+Analyzes cross-ticker correlations using:
+- **NCCI Algorithm:** Measures co-occurrence frequency of stocks in news articles
+- **Jaccard Similarity:** Calculates set-based similarity between ticker keyword sets
+- **Persistent News Logs:** Tracks historical news with timestamps and URLs
+- **Cross-ticker Pattern Detection:** Identifies related stocks for diversified trading
+
+### **7. Behavior Questionnaire System**
+
+Enables adaptive agent personality through:
+- Interactive questionnaire for trading preference assessment
+- Dynamic prompt injection based on behavioral profile
+- Contrarian vs. market-following signal mapping
+- Session-persistent behavior configuration
+
+### **8. Enhanced Discovery Phase**
+
+Improved ticker selection process:
+- Keyword-based cross-search for relevant tickers
+- Validation and verification of ticker selections
+- News-driven candidate generation
+- User confirmation before trading starts
+
+### **9. Journal Entry**
 
 Every decision is logged as a complete JSONL entry:
 
@@ -244,7 +299,9 @@ Every decision is logged as a complete JSONL entry:
   "ma5": 194.20,
   "sentiment": 0.45,
   "sentiment_label": "positive",
+  "correlations": [{"ticker": "MSFT", "ncci": 0.82, "jaccard": 0.65}],
   "mode": "normal",
+  "strategy": "value_investing",
   "order_id": "order-abc123",
   "price_after": null,
   "outcome_pct": null,
@@ -258,7 +315,7 @@ Every decision is logged as a complete JSONL entry:
 
 Outcome fields (`price_after`, `outcome_pct`) are filled in the **next cycle** when a new price is available.
 
-### **6. Session Persistence**
+### **10. Session Persistence**
 
 Saved state in `data/session.json`:
 
@@ -270,6 +327,7 @@ Saved state in `data/session.json`:
   "active_prompt": "green investing strategy",
   "initial_prompt": "fallback if timeout",
   "active_strategy_id": "green_esg",
+  "behavior_profile": {"risk_tolerance": "medium", "approach": "balanced"},
   "portfolio_snapshot": {...},
   "behavior_change_count": 0
 }
@@ -313,11 +371,17 @@ T_BEHAVIOR_MAX=180
 HOT_WINDOW_SIZE=5
 WARM_COMPACTION_TRIGGER=15
 
+# ── Correlation Analysis ────────────────────────────────────────
+NCCI_WINDOW_DAYS=7
+JACCARD_MIN_THRESHOLD=0.3
+
 # ── Data Paths ──────────────────────────────────────────────────
 JOURNAL_PATH=data/journal.jsonl
 ERROR_LOG_PATH=data/error_log.jsonl
+NEWS_LOG_PATH=data/news_log.jsonl
 SESSION_PATH=data/session.json
 IMITATIVE_DATASET_PATH=data/strategies/imitative_dataset.json
+STRATEGY_CONFIG_PATH=data/strategies/strategy_config.json
 ```
 
 ---
@@ -330,9 +394,11 @@ The agent creates these files at runtime:
 data/
 ├── journal.jsonl              # All trading decisions (append-only)
 ├── error_log.jsonl            # All errors and retries
+├── news_log.jsonl             # All news articles with URLs (persistent)
 ├── session.json               # Current session state
 └── strategies/
-    └── imitative_dataset.json # 5 investor strategies (created if missing)
+    ├── imitative_dataset.json # 5 investor strategies (created if missing)
+    └── strategy_config.json   # Dynamic strategy library configuration
 ```
 
 **Analyze Results:**
@@ -346,6 +412,12 @@ jq '.action' data/journal.jsonl | sort | uniq -c
 
 # Calculate final P&L
 tail -1 data/journal.jsonl | jq '.pnl_pct'
+
+# Analyze correlations
+jq '.correlations' data/journal.jsonl | jq -s 'add | group_by(.ticker) | map({ticker: .[0].ticker, avg_ncci: (map(.ncci) | add / length)})'
+
+# View recent news
+tail -20 data/news_log.jsonl | jq '{ticker, headline, url}'
 ```
 
 ---
@@ -363,6 +435,7 @@ Checks:
 - ✅ Market data feed (AAPL, MSFT latest bars)
 - ✅ Alpaca news feed
 - ✅ Ollama models available (Gemma4 + Qwen2.5)
+- ✅ News persistence and URL validation
 - ⚠️ Optional: Anthropic Claude, NewsAPI, Polygon.io
 
 ---
@@ -391,12 +464,12 @@ bip_hackathon2026/
 │   ├── reasoner.py                     # Module 7: Gemma4:12b
 │   ├── broker.py                       # Module 8: Alpaca orders
 │   ├── session.py                      # Module 9: Session lifecycle
-│   ├── behavior.py                     # Module 10: Behavior management
+│   ├── behavior.py                     # Module 10: Behavior + questionnaire
 │   ├── loop.py                         # Module 11: Main loop
-│   └── discovery.py                    # Discovery phase
-│
-├── ui/
-│   └── dashboard.py                    # Module 12: Rich TUI
+│   ├── discovery.py                    # Module 12: Discovery phase + cross-search
+│   ├── correlation.py                  # Module 13: NCCI + Jaccard
+│   ├── strategy_library.py             # Module 14: Dynamic strategies
+│   └── ui/dashboard.py                 # Module 15: Rich TUI
 │
 ├── tests/
 │   ├── test_connections.py
@@ -405,14 +478,18 @@ bip_hackathon2026/
 │   ├── test_journal.py
 │   ├── test_memory_manager.py
 │   ├── test_behavior.py
-│   └── test_session.py
+│   ├── test_session.py
+│   ├── test_correlation.py
+│   └── test_strategy_library.py
 │
 ├── data/                               # Created at runtime
 │   ├── journal.jsonl
 │   ├── error_log.jsonl
+│   ├── news_log.jsonl
 │   ├── session.json
 │   └── strategies/
-│       └── imitative_dataset.json
+│       ├── imitative_dataset.json
+│       └── strategy_config.json
 │
 └── uv.lock
 ```
@@ -431,6 +508,7 @@ bip_hackathon2026/
 | **Data Format** | JSONL (append-only) |
 | **UI** | rich + textual |
 | **Testing** | pytest |
+| **Correlation** | Custom NCCI + Jaccard similarity |
 
 **Dependencies:**
 - `alpaca-py` — trading API
@@ -456,21 +534,27 @@ bip_hackathon2026/
 │ P&L:           +2.35%                      │
 │ Autonomous:    12                          │
 │ Errors:        0                           │
+│ Strategy:      Value Investing              │
 │                                             │
 │ Resume this session? [s/N]: s               │
 └─────────────────────────────────────────────┘
 ```
 
+### **Behavior Questionnaire**
+Interactive questionnaire that adapts agent trading personality based on user preferences for risk tolerance, market approach, and strategy alignment.
+
 ### **Discovery Phase**
-Agent analyzes market news for a given strategy and asks you to confirm ticker selections before trading starts.
+Agent analyzes market news for a given strategy, performs cross-ticker search, validates candidates, and asks you to confirm selections before trading starts.
 
 ### **Dashboard**
 Real-time TUI showing:
 - Current portfolio value
 - Open positions
-- Recent decisions
+- Recent decisions with correlation data
+- Current strategy and behavior profile
 - Error log
 - Adaptive timeout values
+- NCCI correlation matrix
 
 ---
 
@@ -483,6 +567,7 @@ The agent never crashes. On errors:
 3. **Ollama timeout** → Return safe HOLD decision
 4. **Alpaca order rejected** → Log error, skip that ticker
 5. **Market closed** → Skip trading (paper market is 24h, but checks anyway)
+6. **Invalid ticker from discovery** → Request user validation and re-search
 
 All errors logged to `error_log.jsonl` with timestamp, source, retry count.
 
@@ -491,17 +576,20 @@ All errors logged to `error_log.jsonl` with timestamp, source, retry count.
 ## 📈 Typical Session
 
 ```
-1. [INIT] Load previous session or ask for new prompt
+1. [INIT] Load previous session or ask for new prompt + behavior profile
 2. [CALIBRATE] Measure API + Ollama latency (3 pings each)
-3. [DISCOVERY] Analyze news → present ticker candidates → confirm
-4. [LOOP] Every N seconds:
-   - Fetch prices + news
-   - Classify sentiment (qwen2.5)
-   - Build memory context (HOT/WARM)
-   - Reason about decision (Gemma4)
-   - Execute order if BUY/SELL
-   - Journal outcome
-5. [SHUTDOWN] Ctrl+C → cancel open orders → save session
+3. [QUESTIONNAIRE] Ask behavior preferences (risk, approach, strategy)
+4. [DISCOVERY] Analyze news → cross-search tickers → present candidates → confirm
+5. [LOOP] Every N seconds:
+    - Fetch prices + news + correlations
+    - Classify sentiment (qwen2.5)
+    - Calculate NCCI + Jaccard correlations
+    - Build memory context (HOT/WARM)
+    - Reason about decision (Gemma4) with strategy injection
+    - Calculate optimized order quantity
+    - Execute order if BUY/SELL
+    - Journal outcome with correlations
+6. [SHUTDOWN] Ctrl+C → cancel open orders → save session
 ```
 
 ---
@@ -514,16 +602,41 @@ All errors logged to `error_log.jsonl` with timestamp, source, retry count.
 ✅ **Market Hours Check** — Don't trade when markets are closed  
 ✅ **Staleness Penalty** — Reduce confidence on old data  
 ✅ **Graceful Degradation** — Fall back to cache or safe HOLD  
-✅ **Full Traceability** — Every decision logged with reasoning  
+✅ **Full Traceability** — Every decision logged with reasoning + correlations  
+✅ **URL Validation** — News URLs verified and persisted  
+✅ **Cross-ticker Awareness** — NCCI correlation analysis for informed decisions  
+
+---
+
+## 📝 Recent Updates (Latest Commits)
+
+### **June 17, 2026**
+- **Correlation Index Output** — NCCI calculations now visible in dashboard and journals
+- **LLM Verbosity Enhanced** — Improved logging and output formatting with grey styling for LLM responses
+- **News Log Persistence** — Added missing news log file management to .gitignore
+- **News URL Fixes** — Fixed missing URL fields in experimental news logging
+
+### **June 16, 2026**
+- **News Co-occurrence Correlation Index (NCCI)** — Implemented sophisticated cross-ticker correlation analysis using Jaccard similarity
+- **Better News Retrieval** — Enhanced news persistence and keyword processing
+- **Strategy Library Implementation** — Full integration of dynamic strategy library into reasoner
+- **Enhanced Order Quantity** — Improved position sizing calculation with strategy signal mapping
+- **Discovery Phase Improvements** — Advanced ticker validation and cross-search capabilities
+- **Ticker Cross-Search** — Implemented cross-ticker correlation-based search
+- **UI Dashboard Enhancements** — Added strategy display and real-time correlation visualization
+- **Prompt Injection System** — Work-in-progress behavior questionnaire for adaptive prompts
+- **Contrarian Thinking** — Added contrarian vs. market-following signal logic
+- **Fallback Optimization** — Refined timeout fallback behavior
 
 ---
 
 ## 📝 Notes
 
 - **Ollama Setup:** Gemma4 (12B) + Qwen2.5 (3B) require ~15GB total VRAM. Reduce if needed with smaller models.
-- **First Run:** Expect 2-3 min for Ollama calibration + discovery phase.
+- **First Run:** Expect 2-3 min for Ollama calibration + discovery phase + behavior questionnaire.
 - **Performance:** Typical cycle time is 30-120s (adaptive).
 - **Data Privacy:** All LLMs run locally. No data sent to cloud services.
+- **Correlation Analysis:** NCCI calculations are incremental and cached for performance.
 
 ---
 
@@ -556,6 +669,7 @@ This project is created for the **BIP Hackathon 2026**. See repository for licen
 ## 👤 Author
 
 **Pierluigi Trocini**  
+with contributions from **Elisa Gigliotti** and **Chiara Costantino**  
 BIP Hackathon 2026 Submission
 
 ---
