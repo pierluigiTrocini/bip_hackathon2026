@@ -708,8 +708,7 @@ This project is created for the **BIP Hackathon 2026**. See repository for licen
 
 ## 👤 Author
 
-**Pierluigi Trocini**  
-with contributions from **Elisa Gigliotti** and **Chiara Costantino**  
+**Pierluigi Trocini**, **Elisa Gigliotti** and **Chiara Costantino**  
 BIP Hackathon 2026 Submission
 
 ---
